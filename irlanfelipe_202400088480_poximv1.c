@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#include <inttypes.h>
 
 int main(int argc, char *argv[]) {
     printf("--------------------------------------------------------------------------------\n");
@@ -261,28 +262,32 @@ int main(int argc, char *argv[]) {
                     sprintf(col3_details, "%s=0x%08x*0x%08x=0x%08x", x_label[rd], x[rs1], x[rs2], data_low);
                     fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
                     // atualizando registrador se nao for x0
-                    if(rd != 0) x[rd] = data_low;
+                    if(rd != 0) x[rd] = (uint32_t)data_low;
                 }
                 // mulh funct3 == 001 and funct7 == 0000001
                 else if(funct3 == 0b001 && funct7 == 0b0000001){
-                    const int64_t data = (int32_t)x[rs1] * (int32_t)x[rs2];
-                    const int32_t data_high = (int32_t)(data >> 32);
-                    // imprimindo instrucao no arquivo
+                    printf("\n[%s]%d * [%s]%d = [%s]%d", x_label[rs1], (int32_t)x[rs1], x_label[rs2], (int32_t)x[rs2], x_label[rd], (int32_t)x[rs1] * (int32_t)x[rs2]);
+                    __int128 data = (__int128)(int32_t)x[rs1] * (__int128)(int32_t)x[rs2];
+                    int32_t data_high = (int32_t)(data >> 32);
                     char col1_addr[20];
                     char col2_inst[30];
                     char col3_details[60];
+                    // printf("\nlog:: data = 0x%08x", (uint32_t)data);
+                    // printf("\nlog:: data_high = 0x%08x", (uint32_t)data_high);
 
                     sprintf(col1_addr, "0x%08x:mulh", pc);
                     sprintf(col2_inst, "%s,%s,%s", x_label[rd], x_label[rs1], x_label[rs2]);
-                    sprintf(col3_details, "%s=0x%08x*0x%08x=0x%08x", x_label[rd], x[rs1], x[rs2], data_high);
+                    sprintf(col3_details, "%s=0x%08x*0x%08x=0x%08x", x_label[rd], x[rs1], x[rs2], (uint32_t)data_high);
                     fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
                     // atualizando registrador se nao for x0
-                    if(rd != 0) x[rd] = data_high;
+                    if(rd != 0) x[rd] = (uint32_t)data_high;
                 }
                 // mulhsu funct3 == 010 and funct7 == 0000001
                 else if(funct3 == 0b010 && funct7 == 0b0000001){
-                    const int64_t data = (int32_t)x[rs1] * (uint32_t)x[rs2];
-                    const int32_t data_high = (int32_t)(data >> 32);
+                    // const int64_t data = (int32_t)x[rs1] * (uint32_t)x[rs2];
+                    // const int32_t data_high = (int32_t)(data >> 32);
+                    __int128 data = (__int128)(int32_t)x[rs1] * (__int128)(uint32_t)x[rs2];
+                    int32_t data_high = (int32_t)(data >> 32);
                     // imprimindo instrucao no arquivo
                     char col1_addr[20];
                     char col2_inst[30];
@@ -290,15 +295,17 @@ int main(int argc, char *argv[]) {
 
                     sprintf(col1_addr, "0x%08x:mulhsu", pc);
                     sprintf(col2_inst, "%s,%s,%s", x_label[rd], x_label[rs1], x_label[rs2]);
-                    sprintf(col3_details, "%s=0x%08x*0x%08x=0x%08x", x_label[rd], x[rs1], x[rs2], data_high);
+                    sprintf(col3_details, "%s=0x%08x*0x%08x=0x%08x", x_label[rd], x[rs1], x[rs2], (uint32_t)data_high);
                     fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
                     // atualizando registrador se nao for x0
-                    if(rd != 0) x[rd] = data_high;
+                    if(rd != 0) x[rd] = (uint32_t)data_high;
                 }
                 // mulhu funct3 == 011 and funct7 == 0000001
                 else if(funct3 == 0b011 && funct7 == 0b0000001){
-                    const uint64_t data = (uint32_t)x[rs1] * (uint32_t)x[rs2];
-                    const uint32_t data_high = (uint32_t)(data >> 32);
+                    // const uint64_t data = (uint32_t)x[rs1] * (uint32_t)x[rs2];
+                    // const uint32_t data_high = (uint32_t)(data >> 32);
+                    __int128 data = (unsigned __int128)(uint32_t)x[rs1] * (unsigned __int128)(uint32_t)x[rs2];
+                    int32_t data_high = (uint32_t)(data >> 32);
                     // imprimindo instrucao no arquivo
                     char col1_addr[20];
                     char col2_inst[30];
@@ -520,7 +527,7 @@ int main(int argc, char *argv[]) {
                 // jalr tipo I
                 if(funct3 == 0b000){
                     const uint32_t simm = (imm >> 11) ? (0xFFFFF000 | imm) : (imm);
-                    const uint32_t address = (x[rs1] + simm) & ~1u; //o padrao risc-v zera o bit 0
+                    const uint32_t address = (x[rs1] + (int32_t)simm) & ~1u; //o padrao risc-v zera o bit 0
                     // imprimindo instrucao no arquivo
                     char col1_addr[20];
                     char col2_inst[30];
@@ -707,15 +714,9 @@ int main(int argc, char *argv[]) {
                     // executando extensao de sinal no campo imediato
                     // const uint32_t esimm = (b_imm1 & 0b100000000000) ? (0xFFFFE000 | b_imm1) : (b_imm1);
                     const int32_t simm = (b_imm2 & 0x1000) ? (b_imm2 | 0xFFFFE000) : b_imm2;
-                    printf("(b_imm2 & 0x1000): 0x%08x\n", (b_imm2 & 0x1000));
-                    printf("(b_imm2 | 0xFFFFE000): 0x%08x\n", (b_imm2 | 0xFFFFE000));
-                    printf("b_imm2: 0x%08x\n", b_imm2);
-                    printf("sim: 0x%08x\n", simm);
                     //calculando endereco da operacao
                     const uint32_t address = pc + simm;
                     // verificando condicao
-                    x[rs1] = 1;
-                    x[rs2] = 1;
                     int condition = (int32_t)x[rs1] == (int32_t)x[rs2];
                     // imprimindo instrucao no arquivo
                     char col1_addr[20];
@@ -751,13 +752,14 @@ int main(int argc, char *argv[]) {
                     fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
                     // definindo proximo pc
                     if(condition)pc = address - 4;
-                    // printf("----------------------------------------------------------------\n");
-                    // fprintf(log, "Address: 0x%08x---bne\n", address);
-                    // printf("----------------------------------------------------------------\n");
+                    if(x[5] == 0x80000fff && x[6] == 0x00000fff){
+                        printf("Parada forcada---t0=0x%08x--------t1=0x%08x", x[5], x[6]);
+                        run = 0;
+                    }
                 }
                 // blt 
                 else if(funct3 == 0b100){
-                    uint32_t address = pc + (uint32_t)b_imm2;
+                    uint32_t address = pc + b_imm2;
 
                     int condition = (int32_t)x[rs1] < (int32_t)x[rs2];
                     char col1_addr[20];
@@ -765,14 +767,11 @@ int main(int argc, char *argv[]) {
                     char col3_details[60];
 
                     sprintf(col1_addr, "0x%08x:blt", pc);
-                    sprintf(col2_inst, "%s,%s,0x%03x", x_label[rs1], x_label[rs2], b_imm2);
+                    sprintf(col2_inst, "%s,%s,0x%03x", x_label[rs1], x_label[rs2], b_imm2 >> 1);
                     sprintf(col3_details, "(0x%08x<0x%08x)=%d->pc=0x%08x", x[rs1], x[rs2], condition, condition ? address : pc + 4);
                     fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
 
                     if(condition)pc = address - 4;
-                    printf("----------------------------------------------------------------\n");
-                    printf("Address: 0x%08x---blt: pc = 0x%08x\n", address, pc);
-                    printf("----------------------------------------------------------------\n");
                 }
                 //bge
                 else if(funct3 == 0b101){
@@ -781,7 +780,7 @@ int main(int argc, char *argv[]) {
                     const uint32_t address = pc + simm;
                     // verificando condicao
                     int condition = (int32_t)x[rs1] >= (int32_t)x[rs2];
-                        // imprimindo instrucao no arquivo
+                    // imprimindo instrucao no arquivo
                     char col1_addr[20];
                     char col2_inst[30];
                     char col3_details[60];
@@ -792,9 +791,6 @@ int main(int argc, char *argv[]) {
                     fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
                     // definindo proximo pc
                     if(condition)pc = address - 4;
-                    printf("----------------------------------------------------------------\n");
-                    printf("Address: 0x%08x---bge: pc = 0x%08x\n", address, pc);
-                    printf("----------------------------------------------------------------\n");
                 }
                 //bltu
                 else if(funct3 == 0b110){
@@ -814,9 +810,6 @@ int main(int argc, char *argv[]) {
                     fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
                     // definindo proximo pc
                     if(condition)pc = address - 4;
-                    printf("----------------------------------------------------------------\n");
-                    printf("Address: 0x%08x---bltu: pc = 0x%08x\n", address, pc);
-                    printf("----------------------------------------------------------------\n");
                 }
                 //bgeu
                 else if(funct3 == 0b111){
@@ -836,9 +829,6 @@ int main(int argc, char *argv[]) {
                     fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
                     // definindo proximo pc
                     if(condition)pc = address - 4;
-                    printf("----------------------------------------------------------------\n");
-                    printf("Address: 0x%08x---bgeu: pc = 0x%08x\n", address, pc);
-                    printf("----------------------------------------------------------------\n");
                 }
                 break;
             }
@@ -867,25 +857,15 @@ int main(int argc, char *argv[]) {
                 char col1_addr[20];
                 char col2_inst[30];
                 char col3_details[60];
-                if(imm20_a != 0){
-                    const uint32_t data = pc + (imm20_a << 12);
-                    // imprimindo instrucao no arquivo                    
-                    sprintf(col1_addr, "0x%08x:auipc", pc);
-                    sprintf(col2_inst, "%s,0x%05x", x_label[rd], imm20_a);
-                    sprintf(col3_details, "%s=0x%08x+0x%08x=0x%08x", x_label[rd], pc, (imm20_a << 12), data);
-                    fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
-                    // atualizando registrador se nao for x0
-                    if(rd != 0) x[rd] = data;
-                }else{
-                    const uint32_t data = pc;
-                    // imprimindo instrucao no arquivo
-                    sprintf(col1_addr, "0x%08x:auipc", pc);
-                    sprintf(col2_inst, "%s,0x%05x", x_label[rd], imm20_a);
-                    sprintf(col3_details, "%s=0x%08x+0x%08x=0x%08x", x_label[rd], (imm20_a << 12), pc, data);
-                    fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
-                    // atualizando registrador se nao for x0
-                    if(rd != 0) x[rd] = data;
-                }
+
+                const uint32_t data = pc + (imm20_a << 12);
+                // imprimindo instrucao no arquivo                    
+                sprintf(col1_addr, "0x%08x:auipc", pc);
+                sprintf(col2_inst, "%s,0x%05x", x_label[rd], imm20_a);
+                sprintf(col3_details, "%s=0x%08x+0x%08x=0x%08x", x_label[rd], pc, (imm20_a << 12), data);
+                fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
+                // atualizando registrador se nao for x0
+                if(rd != 0) x[rd] = data;
                 break;
             }
             // tipo J
