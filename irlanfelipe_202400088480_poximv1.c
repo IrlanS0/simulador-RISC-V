@@ -8,21 +8,21 @@ int main(int argc, char *argv[]) {
     FILE *input = fopen(argv[1], "r");
     if (!input) {
         perror("Erro ao abrir arquivo");
-        return 1;
+        exit(128);
     };
     FILE *output = fopen(argv[2], "w");
     if (!output) {
         perror("Erro ao abrir arquivo");
         fclose(input);
-        return 1;
+        exit(128);
     };
-    FILE *log = fopen(argv[3], "w");
-    if (!log) {
-        perror("Erro ao abrir arquivo");
-        fclose(input);
-        fclose(output);
-        return 1;
-    };
+    // FILE *log = fopen("log.txt", "w");
+    // if (!log) {
+    //     perror("Erro ao abrir arquivo");
+    //     fclose(input);
+    //     fclose(output);
+    //     return 1;
+    // };
 
     char token[32];  // Para armazenar cada “palavra” lida (ex: "@80000000", "6F", "00")
     const uint32_t offset = 0x80000000;
@@ -65,7 +65,7 @@ int main(int argc, char *argv[]) {
             printf("error: pc out of bounds at pc = 0x%08x\n", pc);
             break;
         }
-        fprintf(log, "---------------------------------------------------------\n");
+        // fprintf(log, "---------------------------------------------------------\n");
         // alinhando os 4 bytes da memoria
         const uint32_t instruction = ((uint32_t*)(mem))[(pc - offset) >> 2];
         // decodificando os opcodes
@@ -74,10 +74,10 @@ int main(int argc, char *argv[]) {
         const uint8_t funct7 = instruction >> 25;
         const uint16_t imm = (instruction >> 20) & 0b111111111111;
         const uint8_t uimm = (instruction & (0b11111 << 20)) >> 20;
-        const uint16_t b_imm1 = ((instruction >> 31) & 0b1) << 11 | 
-        ((instruction >> 7) & 0b1) << 10 |
-        ((instruction >> 25) & 0b111111) << 4 |
-        ((instruction >> 8) & 0b1111);
+        // const uint16_t b_imm1 = ((instruction >> 31) & 0b1) << 11 | 
+        // ((instruction >> 7) & 0b1) << 10 |
+        // ((instruction >> 25) & 0b111111) << 4 |
+        // ((instruction >> 8) & 0b1111);
         const uint16_t b_imm2 = ((instruction >> 31) & 0b1) << 12 | 
         ((instruction >> 7) & 0b1) << 11 |
         ((instruction >> 25) & 0b111111) << 5 |
@@ -92,7 +92,7 @@ int main(int argc, char *argv[]) {
         (((instruction & (0b11111111 << 12)) >> 12) << 11) |
         (((instruction & (0b1 << 20)) >> 20) << 10) |
         ((instruction & (0b1111111111 << 21)) >> 21);
-        fprintf(log, "PC: 0x%08x Instruction: 0x%08x\nimm: 0x%08x\nuimm: 0x%08x\nimm20: 0x%08x\nb_imm1: 0x%08x\nb_imm2: 0x%08x\ns_imm: 0x%08x\nrs2: %s\nrs1: %s\nrd: %s\n", pc, instruction, imm, uimm, imm20, b_imm1, b_imm2, s_imm, x_label[rs2], x_label[rs1], x_label[rd]);
+        // fprintf(log, "PC: 0x%08x Instruction: 0x%08x\nimm: 0x%08x\nuimm: 0x%08x\nimm20: 0x%08x\nb_imm1: 0x%08x\nb_imm2: 0x%08x\ns_imm: 0x%08x\nrs2: %s\nrs1: %s\nrd: %s\n", pc, instruction, imm, uimm, imm20, b_imm1, b_imm2, s_imm, x_label[rs2], x_label[rs1], x_label[rd]);
         
         switch(opcode){
             //tipo R
@@ -729,7 +729,7 @@ int main(int argc, char *argv[]) {
                     // definindo proximo pc
                     if(condition)pc = address - 4;
                     printf("----------------------------------------------------------------\n");
-                    fprintf(log, "Address: 0x%08x---beq\n", address);
+                    // fprintf(log, "Address: 0x%08x---beq\n", address);
                     printf("----------------------------------------------------------------\n");;
                 }
                 //bne
@@ -752,7 +752,7 @@ int main(int argc, char *argv[]) {
                     // definindo proximo pc
                     if(condition)pc = address - 4;
                     // printf("----------------------------------------------------------------\n");
-                    fprintf(log, "Address: 0x%08x---bne\n", address);
+                    // fprintf(log, "Address: 0x%08x---bne\n", address);
                     // printf("----------------------------------------------------------------\n");
                 }
                 // blt 
@@ -915,14 +915,14 @@ int main(int argc, char *argv[]) {
 				// Halting simulation
 			run = 0;
         }
-        fprintf(log, "pc previous: 0x%08x\n", pc);
+        // fprintf(log, "pc previous: 0x%08x\n", pc);
         pc += 4;
-        fprintf(log, "pc next: 0x%08x\n", pc);
-        fprintf(log, "---------------------------------------------------------\n");
+        // fprintf(log, "pc next: 0x%08x\n", pc);
+        // fprintf(log, "---------------------------------------------------------\n");
     }
     
     free(mem);
-    fclose(log);
+    // fclose(log);
     fclose(output);
     fclose(input);
     printf("--------------------------------------------------------------------------------\n");
