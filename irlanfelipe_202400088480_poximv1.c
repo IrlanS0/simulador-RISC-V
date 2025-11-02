@@ -171,7 +171,7 @@ int main(int argc, char *argv[]) {
                 }
                 // slt funct3 == 010 and funct7 == 0000000
                 else if(funct3 == 0b010 && funct7 == 0b0000000){
-                    const uint32_t data = ((int32_t)x[rs1] < (int32_t)imm) ? 1 : 0;
+                    const uint32_t data = ((int32_t)x[rs1] < (int32_t)x[rs2]) ? 1 : 0;
                     // imprimindo instrucao no arquivo
                     char col1_addr[20];
                     char col2_inst[30];
