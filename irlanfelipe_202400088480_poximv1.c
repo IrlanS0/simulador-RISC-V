@@ -653,6 +653,7 @@ int main(int argc, char *argv[]) {
             case 0b0100011: {
                 // sb funct3 == 000
                 if(funct3 == 0b000){
+                    x[rs1] = 12;
                     const uint32_t simm = (s_imm >> 11) ? (0xFFFFF000 | s_imm) : (s_imm);
                     const uint32_t address = x[rs1] + simm;
                     const uint32_t data_change = x[rs2] & 0xFF;
@@ -706,11 +707,11 @@ int main(int argc, char *argv[]) {
             }
             // tipo B
             case 0b1100011:{
+                const int32_t simm = (b_imm2 & 0x1000) ? (b_imm2 | 0xFFFFE000) : b_imm2;
                 // beq
                 if(funct3 == 0b000){
                     // executando extensao de sinal no campo imediato
                     // const uint32_t esimm = (b_imm1 & 0b100000000000) ? (0xFFFFE000 | b_imm1) : (b_imm1);
-                    const int32_t simm = (b_imm2 & 0x1000) ? (b_imm2 | 0xFFFFE000) : b_imm2;
                     //calculando endereco da operacao
                     const uint32_t address = pc + simm;
                     // verificando condicao
@@ -733,9 +734,7 @@ int main(int argc, char *argv[]) {
                 //bne
                 else if(funct3 == 0b001){
                     // const uint32_t esimm = (b_imm1 & 0b100000000000) ? (0xFFFFE000 | b_imm1) : (b_imm1);
-                    const int32_t simm = (b_imm2 & 0x1000) ? (b_imm2 | 0xFFFFE000) : b_imm2;
-                    
-                    const uint32_t address = pc + (simm & ~1);
+                    const uint32_t address = pc + simm;
                     // verificando condicao
                     int condition = (int32_t)x[rs1] != (int32_t)x[rs2];
                     // imprimindo instrucao no arquivo
@@ -757,7 +756,7 @@ int main(int argc, char *argv[]) {
                 }
                 // blt 
                 else if(funct3 == 0b100){
-                    uint32_t address = pc + b_imm2;
+                    uint32_t address = pc + simm;
 
                     int condition = (int32_t)x[rs1] < (int32_t)x[rs2];
                     char col1_addr[20];
@@ -774,7 +773,6 @@ int main(int argc, char *argv[]) {
                 //bge
                 else if(funct3 == 0b101){
                     // const uint32_t esimm = (b_imm1 & 0b100000000000) ? (0xFFFFE000 | b_imm1) : (b_imm1);
-                    const int32_t simm = (b_imm2 & 0x1000) ? (b_imm2 | 0xFFFFE000) : b_imm2;
                     const uint32_t address = pc + simm;
                     // verificando condicao
                     int condition = (int32_t)x[rs1] >= (int32_t)x[rs2];
@@ -793,7 +791,6 @@ int main(int argc, char *argv[]) {
                 //bltu
                 else if(funct3 == 0b110){
                     // const uint32_t esimm = (b_imm1 & 0b100000000000) ? (0xFFFFE000 | b_imm1) : (b_imm1);
-                    const int32_t simm = (b_imm2 & 0x1000) ? (b_imm2 | 0xFFFFE000) : b_imm2;
                     const uint32_t address = pc + simm;
                     //verificando condicao
                     int condition = (uint32_t)x[rs1] < (uint32_t)x[rs2];
@@ -812,7 +809,6 @@ int main(int argc, char *argv[]) {
                 //bgeu
                 else if(funct3 == 0b111){
                     // const uint32_t esimm = (b_imm1 & 0b100000000000) ? (0xFFFFE000 | b_imm1) : (b_imm1);
-                    const int32_t simm = (b_imm2 & 0x1000) ? (b_imm2 | 0xFFFFE000) : b_imm2;
                     const uint32_t address = pc + simm;
                     //verificando condicao
                     int condition = (uint32_t)x[rs1] >= (uint32_t)x[rs2];
