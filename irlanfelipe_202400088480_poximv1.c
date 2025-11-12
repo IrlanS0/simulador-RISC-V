@@ -85,10 +85,10 @@ int main(int argc, char *argv[]) {
         const uint8_t rs2 = (instruction & (0b11111 << 20)) >> 20;
         const uint8_t funct3 = (instruction & (0b111 << 12)) >> 12;
         const uint8_t rd = (instruction & (0b11111 << 7)) >> 7;
-        const uint32_t imm20 = ((instruction >> 31) << 19) |
-        (((instruction & (0b11111111 << 12)) >> 12) << 11) |
-        (((instruction & (0b1 << 20)) >> 20) << 10) |
-        ((instruction & (0b1111111111 << 21)) >> 21);
+        // const uint32_t imm20 = ((instruction >> 31) << 19) |
+        // (((instruction & (0b11111111 << 12)) >> 12) << 11) |
+        // (((instruction & (0b1 << 20)) >> 20) << 10) |
+        // ((instruction & (0b1111111111 << 21)) >> 21);
         // fprintf(log, "PC: 0x%08x Instruction: 0x%08x\nimm: 0x%08x\nuimm: 0x%08x\nimm20: 0x%08x\nb_imm1: 0x%08x\nb_imm2: 0x%08x\ns_imm: 0x%08x\nrs2: %s\nrs1: %s\nrd: %s\n", pc, instruction, imm, uimm, imm20, b_imm1, b_imm2, s_imm, x_label[rs2], x_label[rs1], x_label[rd]);
         
         switch(opcode){
@@ -459,7 +459,8 @@ int main(int argc, char *argv[]) {
                 }
                 // xori funct3 == 100 and funct7 == 0000000
                 else if(funct3 == 0b100){
-                    const uint32_t data = x[rs1] ^ imm;
+                    const int32_t simm = (imm >> 11) ? (0xFFFFF000 | imm) : (imm);
+                    const uint32_t data = x[rs1] ^ simm;
                     // imprimindo instrucao no arquivo
                     char col1_addr[20];
                     char col2_inst[30];
@@ -474,7 +475,8 @@ int main(int argc, char *argv[]) {
                 }
                 // andi funct3 == 111 and funct7 == 0000000
                 else if(funct3 == 0b111){
-                    const uint32_t data = x[rs1] & imm;
+                    const int32_t simm = (imm >> 11) ? (0xFFFFF000 | imm) : (imm);
+                    const uint32_t data = x[rs1] & simm;
                     // imprimindo instrucao no arquivo
                     char col1_addr[20];
                     char col2_inst[30];
@@ -489,7 +491,8 @@ int main(int argc, char *argv[]) {
                 }
                 // ori funct3 == 110 and funct7 == 0000000
                 else if(funct3 == 0b110){
-                    const uint32_t data = x[rs1] | imm;
+                    const int32_t simm = (imm >> 11) ? (0xFFFFF000 | imm) : (imm);
+                    const uint32_t data = x[rs1] | simm;
                     // imprimindo instrucao no arquivo
                     char col1_addr[20];
                     char col2_inst[30];
@@ -638,7 +641,7 @@ int main(int argc, char *argv[]) {
             case 0b1110011:{
                 // ebreak (funct3 == 000 and imm == 1)
                 if(funct3 == 0b000 && imm == 1) {
-                        // Outputting instruction to console
+                    // Outputting instruction to console
                     fprintf(output,"0x%08x:ebreak\n", pc);
                     // Retrieving previous and next instructions
                     const uint32_t previous = ((uint32_t*)(mem))[(pc - 4 - offset) >> 2];
@@ -653,7 +656,6 @@ int main(int argc, char *argv[]) {
             case 0b0100011: {
                 // sb funct3 == 000
                 if(funct3 == 0b000){
-                    x[rs1] = 12;
                     const uint32_t simm = (s_imm >> 11) ? (0xFFFFF000 | s_imm) : (s_imm);
                     const uint32_t address = x[rs1] + simm;
                     const uint32_t data_change = x[rs2] & 0xFF;
@@ -727,9 +729,6 @@ int main(int argc, char *argv[]) {
                     fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
                     // definindo proximo pc
                     if(condition)pc = address - 4;
-                    printf("----------------------------------------------------------------\n");
-                    // fprintf(log, "Address: 0x%08x---beq\n", address);
-                    printf("----------------------------------------------------------------\n");;
                 }
                 //bne
                 else if(funct3 == 0b001){
@@ -846,40 +845,56 @@ int main(int argc, char *argv[]) {
             }
             // tipo U
             case 0b0010111:{
-                // auipc 
-                int32_t imm20_a = (int32_t)instruction >> 12;
+                // auipc
+
+                const int32_t imm_u_val = (int32_t)(instruction & 0xFFFFF000);
+
                 char col1_addr[20];
                 char col2_inst[30];
                 char col3_details[60];
 
-                const uint32_t data = pc + (imm20_a << 12);
-                // imprimindo instrucao no arquivo                    
+                // Some o valor (que já está 'deslocado') ao PC
+                const uint32_t data = pc + imm_u_val;
+
+                // Para o log, podemos mostrar os 20 bits originais
+                const uint32_t imm20_for_log = (uint32_t)imm_u_val >> 12;
+
                 sprintf(col1_addr, "0x%08x:auipc", pc);
-                sprintf(col2_inst, "%s,0x%05x", x_label[rd], imm20_a);
-                sprintf(col3_details, "%s=0x%08x+0x%08x=0x%08x", x_label[rd], pc, (imm20_a << 12), data);
+                sprintf(col2_inst, "%s,0x%05x", x_label[rd], imm20_for_log & 0xFFFFF);
+                sprintf(col3_details, "%s=0x%08x+0x%08x=0x%08x", x_label[rd], pc, imm_u_val, data);
                 fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
-                // atualizando registrador se nao for x0
+
                 if(rd != 0) x[rd] = data;
                 break;
             }
             // tipo J
             case 0b1101111:{
-                // jal funct3 == 000 and funct7 == 0000000
-                // executando extensao de sinal no campo imediato
-                const uint32_t simm = (imm20 >> 19) ? (0xFFF00000 | imm20) : (imm20);
-                //calculando endereco da operacao
-                const uint32_t address = pc + (simm << 1);
-                // imprimindo instrucao no arquivo
+                // imm[20] (bit 31 da instrução) -> movido para bit 20
+                const uint32_t imm20_bit = (instruction & 0x80000000) >> 11;
+                // imm[10:1] (bits 30-21 da instrução) -> movido para bits 10-1
+                const uint32_t imm10_1_bits = (instruction & 0x7FE00000) >> 20;
+                // imm[11] (bit 20 da instrução) -> movido para bit 11
+                const uint32_t imm11_bit = (instruction & 0x00100000) >> 9;
+                // imm[19:12] (bits 19-12 da instrução) -> já estão nos bits 19-12
+                const uint32_t imm19_12_bits = (instruction & 0x000FF000);
+
+                // Juntando os pedaços
+                const uint32_t imm_j = imm20_bit | imm10_1_bits | imm11_bit | imm19_12_bits;
+                const int32_t simm = (imm_j & 0x00100000) ? (imm_j | 0xFFE00000) : imm_j;
+                const uint32_t address = pc + simm;
                 char col1_addr[20];
                 char col2_inst[30];
                 char col3_details[60];
 
+                // Usando imm_j >> 1 para exibir o offset (como 0x02c) em vez do valor bruto
                 sprintf(col1_addr, "0x%08x:jal", pc);
-                sprintf(col2_inst, "%s,0x%05x", x_label[rd], imm20);
+                sprintf(col2_inst, "%s,0x%05x", x_label[rd], (simm >> 1) & 0xFFFFF);
                 sprintf(col3_details, "pc=0x%08x,%s=0x%08x", address, x_label[rd], pc + 4);
                 fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
+
                 // atualiza registrador se nao for x0
                 if(rd != 0) x[rd] = pc + 4;
+
                 // definindo proximo pc menos 4
                 pc = address - 4;
                 break;
