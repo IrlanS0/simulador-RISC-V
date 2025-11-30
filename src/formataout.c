@@ -129,8 +129,12 @@ void simulate(Simulator *sim)
             break;
         }
 
-        // 1. FETCH
-        const uint32_t instruction = ((uint32_t *)(sim->mem))[(sim->pc - sim->offset) >> 2];
+        // 1. FETCH (Seguro contra alinhamento)
+        const uint32_t mem_addr_pc = sim->pc - sim->offset;
+        const uint32_t instruction = (uint32_t)sim->mem[mem_addr_pc] |
+                                     (uint32_t)(sim->mem[mem_addr_pc + 1] << 8) |
+                                     (uint32_t)(sim->mem[mem_addr_pc + 2] << 16) |
+                                     (uint32_t)(sim->mem[mem_addr_pc + 3] << 24);
 
         // 2. DECODE (Campos básicos)
         const uint8_t opcode = instruction & 0x7F;
@@ -415,26 +419,31 @@ void simulate(Simulator *sim)
         {
             const int32_t simm = get_simm_i(imm_i);
             const uint32_t address = sim->x[rs1] + simm;
+            const uint32_t mem_addr = address - sim->offset;
 
             if (funct3 == 0b000)
             { // lb
-                const int8_t data = *((int8_t *)(sim->mem + address - sim->offset));
+                const int8_t data = (int8_t)sim->mem[mem_addr]; // Seguro
                 sprintf(col2_inst, "%s,0x%03x(%s)", sim->x_label[rd], imm_i, sim->x_label[rs1]);
                 sprintf(col3_details, "%s=mem[0x%08x]=0x%08x", sim->x_label[rd], address, data);
                 print_log(sim, "lb", col2_inst, col3_details);
-                write_reg(sim, rd, (int32_t)data);
+                write_reg(sim, rd, (int32_t)data); // Sign-extend
             }
             else if (funct3 == 0b001)
-            { // lh
-                const int16_t data = *((int16_t *)(sim->mem + address - sim->offset));
+            { // lh (CORRIGIDO)
+                const int16_t data = (int16_t)((uint16_t)sim->mem[mem_addr] |
+                                               (uint16_t)(sim->mem[mem_addr + 1] << 8));
                 sprintf(col2_inst, "%s,0x%03x(%s)", sim->x_label[rd], imm_i, sim->x_label[rs1]);
                 sprintf(col3_details, "%s=mem[0x%08x]=0x%08x", sim->x_label[rd], address, data);
                 print_log(sim, "lh", col2_inst, col3_details);
-                write_reg(sim, rd, (int32_t)data);
+                write_reg(sim, rd, (int32_t)data); // Sign-extend
             }
             else if (funct3 == 0b010)
-            { // lw
-                const uint32_t data = *((uint32_t *)(sim->mem + address - sim->offset));
+            { // lw (CORRIGIDO)
+                const uint32_t data = (uint32_t)sim->mem[mem_addr] |
+                                      (uint32_t)(sim->mem[mem_addr + 1] << 8) |
+                                      (uint32_t)(sim->mem[mem_addr + 2] << 16) |
+                                      (uint32_t)(sim->mem[mem_addr + 3] << 24);
                 sprintf(col2_inst, "%s,0x%03x(%s)", sim->x_label[rd], imm_i, sim->x_label[rs1]);
                 sprintf(col3_details, "%s=mem[0x%08x]=0x%08x", sim->x_label[rd], address, data);
                 print_log(sim, "lw", col2_inst, col3_details);
@@ -442,19 +451,20 @@ void simulate(Simulator *sim)
             }
             else if (funct3 == 0b100)
             { // lbu
-                const uint8_t data = *((uint8_t *)(sim->mem + address - sim->offset));
+                const uint8_t data = sim->mem[mem_addr]; // Seguro
                 sprintf(col2_inst, "%s,0x%03x(%s)", sim->x_label[rd], imm_i, sim->x_label[rs1]);
                 sprintf(col3_details, "%s=mem[0x%08x]=0x%08x", sim->x_label[rd], address, data);
                 print_log(sim, "lbu", col2_inst, col3_details);
-                write_reg(sim, rd, (uint32_t)data);
+                write_reg(sim, rd, (uint32_t)data); // Zero-extend
             }
             else if (funct3 == 0b101)
-            { // lhu
-                const uint16_t data = *((uint16_t *)(sim->mem + address - sim->offset));
+            { // lhu (CORRIGIDO)
+                const uint16_t data = (uint16_t)sim->mem[mem_addr] |
+                                      (uint16_t)(sim->mem[mem_addr + 1] << 8);
                 sprintf(col2_inst, "%s,0x%03x(%s)", sim->x_label[rd], imm_i, sim->x_label[rs1]);
                 sprintf(col3_details, "%s=mem[0x%08x]=0x%08x", sim->x_label[rd], address, data);
                 print_log(sim, "lhu", col2_inst, col3_details);
-                write_reg(sim, rd, (uint32_t)data);
+                write_reg(sim, rd, (uint32_t)data); // Zero-extend
             }
             break;
         }
@@ -464,6 +474,7 @@ void simulate(Simulator *sim)
         {
             const int32_t simm = get_simm_s(imm_s);
             const uint32_t address = sim->x[rs1] + simm;
+            const uint32_t mem_addr = address - sim->offset;
 
             if (funct3 == 0b000)
             { // sb
@@ -471,23 +482,27 @@ void simulate(Simulator *sim)
                 sprintf(col2_inst, "%s,0x%03x(%s)", sim->x_label[rs2], imm_s & 0xFFF, sim->x_label[rs1]);
                 sprintf(col3_details, "mem[0x%08x]=0x%02x", address, data_change);
                 print_log(sim, "sb", col2_inst, col3_details);
-                *((uint8_t *)(sim->mem + address - sim->offset)) = data_change;
+                sim->mem[mem_addr] = data_change; // Seguro
             }
             else if (funct3 == 0b001)
-            { // sh
+            { // sh (CORRIGIDO)
                 const uint16_t data_change = sim->x[rs2] & 0xFFFF;
                 sprintf(col2_inst, "%s,0x%03x(%s)", sim->x_label[rs2], imm_s & 0xFFF, sim->x_label[rs1]);
                 sprintf(col3_details, "mem[0x%08x]=0x%04x", address, data_change);
                 print_log(sim, "sh", col2_inst, col3_details);
-                *((uint16_t *)(sim->mem + address - sim->offset)) = data_change;
+                sim->mem[mem_addr] = data_change & 0xFF;
+                sim->mem[mem_addr + 1] = (data_change >> 8) & 0xFF;
             }
             else if (funct3 == 0b010)
-            { // sw
+            { // sw (CORRIGIDO)
                 const uint32_t data_change = sim->x[rs2];
                 sprintf(col2_inst, "%s,0x%03x(%s)", sim->x_label[rs2], imm_s & 0xFFF, sim->x_label[rs1]);
                 sprintf(col3_details, "mem[0x%08x]=0x%08x", address, data_change);
                 print_log(sim, "sw", col2_inst, col3_details);
-                *((uint32_t *)(sim->mem + address - sim->offset)) = data_change;
+                sim->mem[mem_addr] = data_change & 0xFF;
+                sim->mem[mem_addr + 1] = (data_change >> 8) & 0xFF;
+                sim->mem[mem_addr + 2] = (data_change >> 16) & 0xFF;
+                sim->mem[mem_addr + 3] = (data_change >> 24) & 0xFF;
             }
             break;
         }
@@ -536,7 +551,7 @@ void simulate(Simulator *sim)
                 print_log(sim, "bgeu", col2_inst, col3_details);
             }
 
-            sprintf(col2_inst, "%s,%s,0x%03x", sim->x_label[rs1], sim->x_label[rs2], simm >> 1);
+            sprintf(col2_inst, "%s,%s,0x%03x", sim->x_label[rs1], sim->x_label[rs2], imm_b >> 1);
 
             if (condition)
             {
@@ -605,8 +620,19 @@ void simulate(Simulator *sim)
             if (funct3 == 0b000 && imm_i == 1)
             { // ebreak
                 fprintf(sim->output, "0x%08x:ebreak\n", sim->pc);
-                const uint32_t previous = ((uint32_t *)(sim->mem))[(sim->pc - 4 - sim->offset) >> 2];
-                const uint32_t next = ((uint32_t *)(sim->mem))[(sim->pc + 4 - sim->offset) >> 2];
+                
+                // Leitura segura da instrução anterior e próxima para checagem
+                 const uint32_t mem_addr_prev = (sim->pc - 4 - sim->offset);
+                 const uint32_t previous = (uint32_t)sim->mem[mem_addr_prev] |
+                                           (uint32_t)(sim->mem[mem_addr_prev + 1] << 8) |
+                                           (uint32_t)(sim->mem[mem_addr_prev + 2] << 16) |
+                                           (uint32_t)(sim->mem[mem_addr_prev + 3] << 24);
+
+                 const uint32_t mem_addr_next = (sim->pc + 4 - sim->offset);
+                 const uint32_t next = (uint32_t)sim->mem[mem_addr_next] |
+                                       (uint32_t)(sim->mem[mem_addr_next + 1] << 8) |
+                                       (uint32_t)(sim->mem[mem_addr_next + 2] << 16) |
+                                       (uint32_t)(sim->mem[mem_addr_next + 3] << 24);
 
                 // Condição de parada específica
                 if (previous == 0x01f01013 && next == 0x40705013)
@@ -690,7 +716,8 @@ int main(int argc, char *argv[])
     sim.x_label[30] = "t5";
     sim.x_label[31] = "t6";
 
-    sim.mem = (uint8_t *)malloc(MEM_SIZE_BYTES);
+    // Use calloc para garantir que a memória comece zerada
+    sim.mem = (uint8_t *)calloc(MEM_SIZE_BYTES, 1);
     if (!sim.mem)
     {
         perror("Erro ao alocar memória");
