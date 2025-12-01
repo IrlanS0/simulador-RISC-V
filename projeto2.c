@@ -112,7 +112,7 @@ void interruption_handler(CSR_REG *csr, uint32_t *pc, uint32_t cause, uint32_t t
 {
     // MEPC recebe o codigo da proxima instrucao 
     csr_w(csr, 0x341, *pc);
-    // Atualizando MCAUSE
+    // Atualizando MCAUSE (bit 31 = 1 para interrupcao)
     csr_w(csr, 0x342, cause | (1U << 31));
 
     uint32_t mstatus = csr_r(0x300, csr);
@@ -123,14 +123,14 @@ void interruption_handler(CSR_REG *csr, uint32_t *pc, uint32_t cause, uint32_t t
     mstatus |= (0b11 << 11);
     csr_w(csr, 0x300, mstatus);
 
-    uint32_t mtvec_val = csr_r(0x305, csr);
-    uint32_t modo = mtvec_val & 0x3;
-    uint32_t base = mtvec_val & ~0x3;
+    uint32_t mtvec = csr_r(0x305, csr);
+    uint32_t modo = mtvec & 0x3;
+    uint32_t base = mtvec & ~0x3;
 
-    if (modo == 0){
-        *pc = base;
-    } else {
+    if (modo == 1){
         *pc = base + (cause * 4);
+    } else {
+        *pc = base;
     }
 }
 
