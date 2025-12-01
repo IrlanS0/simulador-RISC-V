@@ -294,6 +294,16 @@ int main(int argc, char *argv[])
             csr.mip &= ~(1 << 7);
         }
 
+        uint32_t mstatus = csr_r(0x300, &csr);
+        uint32_t mip = csr.mip;
+
+        bool timer_interrupt = (mstatus & (1 << 3)) && (mip & (1 << 7));
+
+        if (timer_interrupt) {
+            interruption_handler(&csr, &pc, 7, 0, log);
+            continue;
+        }
+
         if (pc >= max_ram || pc < offset)
         {
             exception_handler(&csr, &pc, 1, pc, log);
