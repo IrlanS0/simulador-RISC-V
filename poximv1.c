@@ -4,92 +4,6 @@
 #include <stdlib.h>
 #include <inttypes.h>
 
-typedef struct {
-    uint32_t mstatus;
-    uint32_t mie;
-    uint32_t mtvec;
-    uint32_t mepc;
-    uint32_t mcause;
-    uint32_t mtval;
-    uint32_t mip;
-}CSR_REG;
-
-uint32_t csr_r(uint32_t add, CSR_REG *csr) {
-    switch (add)
-    {
-    case 0x300:
-        return csr->mstatus;
-    case 0x304:
-        return csr->mie;
-    case 0x305:
-        return csr->mtvec;
-    case 0x341:
-        return csr->mepc;
-    case 0x342:
-        return csr->mcause;
-    case 0x343:
-        return csr->mtval;
-    case 0x344:
-        return csr->mip;
-    default:
-        return 0;
-    }
-};
-
-void csr_w(CSR_REG *csr, uint32_t add, uint32_t data) {
-    switch (add)
-    {
-    case 0x300:
-        csr->mstatus = data;
-        break;
-    case 0x304:
-        csr->mie = data;
-        break;
-    case 0x305:
-        csr->mtvec = data;
-        break;
-    case 0x341:
-        csr->mepc = data;
-        break;
-    case 0x342:
-        csr->mcause = data;
-        break;
-    case 0x343:
-        csr->mtval = data;
-        break;
-    case 0x344:
-        // Implementação "Rigorosa":
-        // cpu->csr.mip = (cpu->csr.mip & ~MASK_SOFT) | (value & MASK_SOFT);
-        csr->mip = data;
-        break;
-    default:
-        break;
-    }
-};
-
-void exception_helper(CSR_REG *csr, uint32_t *pc, uint32_t cause, uint32_t tval){
-    // Atualizando MCAUSE
-    csr_w(csr, 0x342, cause);
-    // Atualiza o valor de trap(endereco invalido ou instrucao ilegal)
-    csr_w(csr, 0x343, tval);
-    // Salvar o PC na MEPC
-    csr_w(csr, 0x341, *pc);
-    // Desativando interrupcoes (MIE = 0)
-    uint32_t mstatus = csr_r(0x300, csr);
-    // Pega o valor MIE(bit 3)
-    uint32_t mie = (mstatus >> 3) & 1;
-    // Escreve o valor MIE em MPIE(bit 7)
-    mstatus = (mstatus & ~(1 << 7)) | (mie << 7);
-    // Zera o bit MIE(Desabilita interrupcoes globais)
-    mstatus &= ~(1 << 3);
-    // Escreve o valor MIE no MSTATUS
-    csr_w(csr, 0x300, mstatus);
-    // Le o endereco de destino no mtvec (0x305)
-    uint32_t vetor = csr_r(0x305, csr);
-    // Desviando fluxo: pc recebe o valor de mtvec
-    *pc = (vetor & ~0x3) - 4;
-}
-
 int main(int argc, char *argv[]) {
     printf("--------------------------------------------------------------------------------\n");
     FILE *input = fopen(argv[1], "r");
@@ -103,15 +17,8 @@ int main(int argc, char *argv[]) {
         fclose(input);
         exit(128);
     };
-    FILE *log = fopen("log.txt", "w");
-    if (!log) {
-        perror("Erro ao abrir arquivo de log");
-        fclose(input);
-        fclose(output);
-        exit(128);
-    };
 
-    char token[32];
+    char token[32];  // Para armazenar cada “palavra” lida (ex: "@80000000", "6F", "00")
     const uint32_t offset = 0x80000000;
     size_t i = 0;
     //declarando registradores
@@ -145,26 +52,20 @@ int main(int argc, char *argv[]) {
     }
 
     uint8_t run = 1;
-    CSR_REG csr = {0};
+    
     while(run){
-        if (pc < offset || pc >= 32 * 1024 + offset){
-            fprintf(log, "[DEBUG]CODE 1: Acesso a fora da RAM\n");
-            exception_helper(&csr, &pc, 1, pc);
-            continue;
+        // printf("correct pc = 0x%08x\n", pc);
+        if(pc < offset){
+            printf("error: pc out of bounds at pc = 0x%08x\n", pc);
+            break;
         }
-        if (pc % 4 != 0){
-            fprintf(log, "[DEBUG]CODE 0: Acesso a instrucao desalinhado pc %% 4 != 0\n");
-            exception_helper(&csr, &pc, 0, pc);
-            continue;
-        }
-
+        // fprintf(log, "---------------------------------------------------------\n");
         // alinhando os 4 bytes da memoria
         const uint32_t instruction = ((uint32_t*)(mem))[(pc - offset) >> 2];
         // decodificando os opcodes
         const uint8_t opcode = instruction & 0b1111111;
         // recuperando campos da instrucao
         const uint8_t funct7 = instruction >> 25;
-        const uint8_t funct3 = (instruction & (0b111 << 12)) >> 12;
         const uint16_t imm = (instruction >> 20) & 0b111111111111;
         const uint8_t uimm = (instruction & (0b11111 << 20)) >> 20;
         const uint16_t b_imm2 = ((instruction >> 31) & 0b1) << 12 | 
@@ -175,9 +76,14 @@ int main(int argc, char *argv[]) {
         ((instruction >> 7) & 0b11111);
         const uint8_t rs1 = (instruction & (0b11111 << 15)) >> 15;
         const uint8_t rs2 = (instruction & (0b11111 << 20)) >> 20;
+        const uint8_t funct3 = (instruction & (0b111 << 12)) >> 12;
         const uint8_t rd = (instruction & (0b11111 << 7)) >> 7;
-        const uint32_t csr_addr = (instruction >> 20);
-
+        // const uint32_t imm20 = ((instruction >> 31) << 19) |
+        // (((instruction & (0b11111111 << 12)) >> 12) << 11) |
+        // (((instruction & (0b1 << 20)) >> 20) << 10) |
+        // ((instruction & (0b1111111111 << 21)) >> 21);
+        // fprintf(log, "PC: 0x%08x Instruction: 0x%08x\nimm: 0x%08x\nuimm: 0x%08x\nimm20: 0x%08x\nb_imm1: 0x%08x\nb_imm2: 0x%08x\ns_imm: 0x%08x\nrs2: %s\nrs1: %s\nrd: %s\n", pc, instruction, imm, uimm, imm20, b_imm1, b_imm2, s_imm, x_label[rs2], x_label[rs1], x_label[rd]);
+        
         switch(opcode){
             //tipo R
             case 0b0110011:{
@@ -978,26 +884,19 @@ int main(int argc, char *argv[]) {
                 pc = address - 4;
                 break;
             }
-            default: {
-                exception_helper(&csr, &pc, 2, instruction);
-                uint32_t mcause = csr_r(0x342, &csr);
-                uint32_t mepc = csr_r(0x341, &csr);
-                uint32_t mtval = csr_r(0x343, &csr);
-                char col1_addr[20];
-                char col2_inst[30];
-                char col3_details[100];
-                sprintf(col1_addr, ">exception:illegal_instruction");
-                sprintf(col2_inst, "");
-                sprintf(col3_details, "cause=0x%08x,epc=0x%08x,tval=0x%08x", mcause, mepc, mtval);
-                fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
-                break;
-            } 
+                default:  
+                printf("error: unknown instruction opcode at pc = 0x%08x\n", pc);
+				// Halting simulation
+			run = 0;
         }
+        // fprintf(log, "pc previous: 0x%08x\n", pc);
         pc += 4;
+        // fprintf(log, "pc next: 0x%08x\n", pc);
+        // fprintf(log, "---------------------------------------------------------\n");
     }
     
     free(mem);
-    fclose(log);
+    // fclose(log);
     fclose(output);
     fclose(input);
     printf("--------------------------------------------------------------------------------\n");
