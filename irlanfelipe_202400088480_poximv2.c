@@ -1,8 +1,8 @@
+#include <stdio.h>
+#include <stdlib.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #define MEM_SIZE (32 * 1024)
@@ -16,6 +16,8 @@
 #define MAX_PLIC 0x0c200004
 #define OFFSET_MTIMECMP (OFFSET_CLINT + 0x4000)
 #define OFFSET_MTIME (OFFSET_CLINT + 0xbff8)
+#define PLIC_SOURCE_COUNT 1024
+#define PLIC_CONTEXT_COUNT 1
 
 typedef struct
 {
@@ -29,6 +31,220 @@ typedef struct
     uint32_t mtval;
     uint32_t mip;
 } CSR_REG;
+
+typedef struct
+{
+    // Registradores UART
+    uint8_t rhr;
+    uint8_t ier;
+    uint8_t isr;
+    uint8_t lsr;
+} UART_REG; 
+
+typedef struct
+{
+    uint32_t priority[PLIC_SOURCE_COUNT];
+    uint32_t pending[PLIC_SOURCE_COUNT / 32];
+    uint32_t enable[PLIC_CONTEXT_COUNT][PLIC_SOURCE_COUNT / 32];
+    uint32_t threshold[PLIC_SOURCE_COUNT];
+    uint32_t claim[PLIC_SOURCE_COUNT];
+} PLIC_REG;
+
+void plic_w(PLIC_REG *plic, uint32_t addr, uint32_t value)
+{
+    uint32_t offset = addr - OFFSET_PLIC;
+    // --- PRIORITY ---
+    if (offset < 0x001000)
+    {
+        uint32_t id = offset / 4;
+        if (id > 0 && id < PLIC_SOURCE_COUNT)
+        {
+            plic->priority[id] = value;
+        }
+        return;
+    }
+
+    // --- PENDING ---
+    else if (offset >= 0x001000 && offset < 0x001080)
+    {
+        uint32_t idx = (offset - 0x001000) / 4;
+        if (idx < (PLIC_SOURCE_COUNT / 32))
+        {
+            plic->pending[idx] = value;
+        }
+        return;
+    }
+
+    // --- ENABLE ---
+    else if (offset >= 0x002000 && offset < 0x002080)
+    {
+        uint32_t idx = (offset - 0x002000) / 4;
+        if (idx < (PLIC_SOURCE_COUNT / 32))
+        {
+            plic->enable[0][idx] = value;
+        }
+        return;
+    }
+
+    // --- THRESHOLD/CLAIM ---
+    else if (offset >= 0x002000 && offset < 0x200004)
+    {
+        uint32_t offset_reg = offset - 0x200000;
+        // --- THRESHOLD ---
+        if (offset_reg == 0)
+        {
+            plic->threshold[0] = value;
+        }
+        // --- CLAIM ---
+        else if (offset_reg == 4)
+        {
+            if (value == plic->claim[0])
+                plic->claim[0] = 0;
+        }
+        return;
+    }
+}
+
+uint32_t plic_r(PLIC_REG *plic, uint32_t add)
+{
+    uint32_t offset = add - OFFSET_PLIC;
+    // --- PRIORITY ---
+    if (offset < 0x001000)
+    {
+        uint32_t id = offset / 4;
+        if (id > 0 && id < PLIC_SOURCE_COUNT)
+        {
+            return plic->priority[id];
+        }
+        return 0;
+    }
+
+    // --- PENDING ---
+    else if (offset >= 0x001000 && offset < 0x001080)
+    {
+        uint32_t idx = (offset - 0x001000) / 4;
+        if (idx < (PLIC_SOURCE_COUNT / 32))
+        {
+            return plic->pending[idx];
+        }
+        return 0;
+    }
+
+    // --- ENABLE ---
+    else if (offset >= 0x002000 && offset < 0x002080)
+    {
+        uint32_t idx = (offset - 0x002000) / 4;
+        if (idx < (PLIC_SOURCE_COUNT / 32))
+        {
+            return plic->enable[0][idx];
+        }
+        return 0;
+    }
+
+    // --- THRESHOLD/CLAIM ---
+    else if (offset >= 0x002000 && offset <= 0x200004)
+    {
+        uint32_t offset_reg = offset - 0x200000;
+        // --- THRESHOLD ---
+        if (offset_reg == 0)
+        {
+            return plic->threshold[0];
+        }
+        // --- CLAIM ---
+        else if (offset_reg == 4)
+        {
+            uint32_t max_priority = 0;
+            uint32_t best_id = 0;
+
+            for (int i = 1; i < PLIC_SOURCE_COUNT; i++)
+            {
+                uint32_t idx = i / 32;
+                uint32_t bit = i % 32;
+
+                uint32_t is_pending = (plic->pending[idx] >> bit) & 1;
+                uint32_t is_enable = (plic->enable[0][idx] >> bit) & 1;
+
+                if (is_pending && is_enable)
+                {
+                    if (plic->priority[i] > max_priority)
+                    {
+                        max_priority = plic->priority[i];
+                        best_id = i;
+                    }
+                }
+            }
+
+            if (max_priority < plic->threshold[0])
+            {
+                best_id = 0;
+            }
+
+            else if (best_id > 0)
+            {
+                plic->claim[0] = best_id;
+                
+                uint32_t idx = best_id / 32;
+                uint32_t bit = best_id % 32;
+                plic->pending[idx] &= ~(1 << bit);
+            }
+            return best_id;
+        }
+    }
+    return 0;
+}
+
+uint32_t uart_r(uint32_t add, UART_REG *uart)
+{
+    switch (add)
+    {
+    case 0b000:
+    {
+        uint32_t data = uart->rhr;
+        uart->lsr &= ~0x01;
+        return data;
+    }
+    case 0b001:
+        return uart->ier;
+    case 0b010:
+        {
+            uint8_t iir = 0x01;
+
+            if ((uart->lsr & 0x01) && (uart->ier & 0x01)){
+                iir = 0x04;
+            }
+            else if ((uart->lsr & 0x20) && (uart->ier & 0x02)){
+                iir = 0x02;
+            }
+            return iir;
+        }
+    case 0b101:
+        return uart->lsr | 0x60;
+    default:
+        return 0;
+    }
+};
+
+void uart_w(UART_REG *uart, PLIC_REG *plic, uint32_t add, uint8_t data)
+{
+    switch (add)
+    {
+    case 0b000:
+        putchar((char)data);
+        fflush(stdout);
+        uart->lsr |= 0x20;
+        if (uart->ier & 0x02) {
+            plic->pending[0] |= (1 << 10);
+        }
+        break;
+    case 0b001:
+        uart->ier = data;
+        break;
+    case 0b010:
+        break;
+    default:
+        break;
+    }
+};
 
 uint32_t csr_r(uint32_t add, CSR_REG *csr)
 {
@@ -84,7 +300,7 @@ void csr_w(CSR_REG *csr, uint32_t add, uint32_t data)
 };
 
 void exception_handler(CSR_REG *csr, uint32_t *pc, uint32_t cause,
-                       uint32_t tval, FILE *log)
+                       uint32_t tval)
 {
     // Atualizando MCAUSE
     csr_w(csr, 0x342, cause);
@@ -111,7 +327,7 @@ void exception_handler(CSR_REG *csr, uint32_t *pc, uint32_t cause,
 }
 
 void interruption_handler(CSR_REG *csr, uint32_t *pc, uint32_t cause,
-                          uint32_t tval, FILE *log)
+                          uint32_t tval)
 {
     // MEPC recebe o codigo da proxima instrucao
     csr_w(csr, 0x341, *pc);
@@ -140,69 +356,144 @@ void interruption_handler(CSR_REG *csr, uint32_t *pc, uint32_t cause,
     }
 }
 
-uint32_t load(uint8_t *mem, uint32_t addr, uint64_t mtime, uint64_t mtimecmp,
-              uint32_t msip)
+uint32_t read_word(uint32_t addr, uint8_t *mem, uint8_t bytes, uint32_t index)
 {
-    // 1. SOFTWARE
-    if (addr == OFFSET_CLINT)
+    if (bytes == 4)
     {
-        return msip;
+        uint32_t word = (uint32_t)mem[index] | (uint32_t)(mem[index + 1] << 8) |
+                        (uint32_t)(mem[index + 2] << 16) |
+                        (uint32_t)(mem[index + 3] << 24);
+        return word;
     }
-
-    // 2. TIMER
-    if (addr == OFFSET_MTIME)
+    else if (bytes == 2)
     {
-        return (uint32_t)(mtime & 0xFFFFFFFF);
+        uint16_t word = *((uint16_t *)(mem + addr - OFFSET_RAM));
+        return word;
     }
-    else if (addr == OFFSET_MTIME + 4)
+    else
     {
-        return (uint32_t)(mtime >> 32);
+        int8_t word = *((int8_t *)(mem + addr - OFFSET_RAM));
+        return word;
     }
-    else if (addr == OFFSET_MTIMECMP)
-    {
-        return (uint32_t)(mtimecmp & 0xFFFFFFFF);
-    }
-    else if (addr == OFFSET_MTIMECMP + 4)
-    {
-        return (uint32_t)(mtimecmp >> 32);
-    }
-
-    // 3. RAM
-    uint32_t index = addr - OFFSET_RAM;
-    uint32_t word = (uint32_t)mem[index] | (uint32_t)(mem[index + 1] << 8) |
-                    (uint32_t)(mem[index + 2] << 16) |
-                    (uint32_t)(mem[index + 3] << 24);
-    return word;
 }
 
-void store(uint8_t *mem, uint32_t addr, uint32_t data, uint64_t *mtimecmp,
-           uint32_t *msip)
+uint32_t load(PLIC_REG *plic, UART_REG *uart, uint8_t *mem, uint32_t addr, uint8_t bytes, uint64_t mtime, uint64_t mtimecmp,
+              uint32_t msip)
 {
-    // 1. SOFTWARE
-    if (addr == OFFSET_CLINT)
+    uint32_t index = 0;
+    // 1. UART
+    if (addr >= OFFSET_UART && addr <= MAX_UART)
     {
-        *msip = (data & 1);
-        return;
+        index = (addr - OFFSET_UART) & 0x7;
+
+        return uart_r(index, uart);
     }
 
-    // 2. TIMER
-    if (addr == OFFSET_MTIMECMP)
+    // 2. CLINT
+    else if (addr >= OFFSET_CLINT && addr <= MAX_CLINT)
     {
-        *mtimecmp = (*mtimecmp & 0xFFFFFFFF00000000) | (uint64_t)data;
-        return;
-    }
-    else if (addr == OFFSET_MTIMECMP + 4)
-    {
-        *mtimecmp = (*mtimecmp & 0x00000000FFFFFFFF) | ((uint64_t)data << 32);
-        return;
+        // --- SOFTWARE ---
+        if (addr == OFFSET_CLINT)
+        {
+            return msip;
+        }
+
+        // --- TIMER ---
+        if (addr == OFFSET_MTIME)
+        {
+            return (uint32_t)(mtime & 0xFFFFFFFF);
+        }
+        else if (addr == OFFSET_MTIME + 4)
+        {
+            return (uint32_t)(mtime >> 32);
+        }
+        else if (addr == OFFSET_MTIMECMP)
+        {
+            return (uint32_t)(mtimecmp & 0xFFFFFFFF);
+        }
+        else if (addr == OFFSET_MTIMECMP + 4)
+        {
+            return (uint32_t)(mtimecmp >> 32);
+        }
+        return 0;
     }
 
-    // 3. RAM
-    if (addr >= OFFSET_RAM && addr < MAX_RAM)
+    // 4. PLIC
+    else if (addr >= OFFSET_PLIC && addr <= MAX_PLIC)
+    {
+        return plic_r(plic, addr);
+    }
+
+    // 5. RAM
+    else if (addr >= OFFSET_RAM && addr <= MAX_RAM)
+    {
+        index = addr - OFFSET_RAM;
+        uint32_t ram_info = read_word(addr, mem, bytes, index);
+        return ram_info;
+    }
+
+    return 0;
+}
+
+int store(PLIC_REG *plic, UART_REG *uart, uint8_t *mem, uint8_t bytes, uint32_t addr, uint32_t data, uint64_t *mtimecmp, uint32_t *msip)
+{
+    // 1. UART
+    if (addr >= OFFSET_UART && addr <= MAX_UART)
+    {
+        uint32_t uart_register = ((addr - OFFSET_UART) & 0x7);
+        uart_w(uart, plic, uart_register, (uint8_t)data);
+        return 0;
+    }
+
+    // 2. CLINT
+    if (addr >= OFFSET_CLINT && addr <= MAX_CLINT)
+    {
+        // --- SOFTWARE ---
+        if (addr == OFFSET_CLINT)
+        {
+            *msip = (data & 1);
+            return 0;
+        }
+
+        // --- TIMER --
+        if (addr == OFFSET_MTIMECMP)
+        {
+            *mtimecmp = (*mtimecmp & 0xFFFFFFFF00000000) | (uint64_t)data;
+        }
+        else if (addr == OFFSET_MTIMECMP + 4)
+        {
+            *mtimecmp = (*mtimecmp & 0x00000000FFFFFFFF) | ((uint64_t)data << 32);
+        }
+        return 0;
+    }
+
+    // 4. PLIC
+    else if (addr >= OFFSET_PLIC && addr <= MAX_PLIC)
+    {
+        plic_w(plic, addr, data);
+        return 0;
+    }
+
+    // 5. RAM
+    if (addr >= OFFSET_RAM && (addr + bytes) < MAX_RAM)
     {
         uint32_t index = (addr - OFFSET_RAM) >> 2;
-        ((uint32_t *)(mem))[index] = data;
+        if (bytes == 4)
+        {
+            ((uint32_t *)(mem))[index] = data;
+        }
+        else if (bytes == 2)
+        {
+            data = *((uint16_t *)(mem + addr - OFFSET_RAM));
+        }
+        else if (bytes == 1)
+        {
+            data = *((int8_t *)(mem + addr - OFFSET_RAM));
+        }
+        return 0;
     }
+
+    return -1;
 }
 
 const char *csr_get_name(uint32_t addr)
@@ -234,7 +525,7 @@ void print(uint8_t i, uint32_t pc, uint32_t tval, uint32_t cause,
     char col1_addr[40];
     char col2_inst[60];
     char col3_details[128];
-    sprintf(col2_inst, "");
+    sprintf(col2_inst, " ");
     sprintf(col3_details, "cause=0x%08x,epc=0x%08x,tval=0x%08x", cause, pc, tval);
     if (i == 0)
     {
@@ -256,6 +547,8 @@ void print(uint8_t i, uint32_t pc, uint32_t tval, uint32_t cause,
         {
             fprintf(output, "%-15s%-10s%s\n", col1_addr, col2_inst, col3_details);
         }
+        else
+            fprintf(output, "%-15s%-17s%s\n", col1_addr, col2_inst, col3_details);
     }
     else
     {
@@ -269,20 +562,24 @@ void print(uint8_t i, uint32_t pc, uint32_t tval, uint32_t cause,
         {
             fprintf(output, "%-18s%-19s%s\n", col1_addr, col2_inst, col3_details);
         }
+        else
+            fprintf(output, "%-18s%-19s%s\n", col1_addr, col2_inst, col3_details);
     }
 }
 
 void print_instruction(char *buffer, char *especific_instruction, char *col1_addr, char *col2_inst, uint32_t pc,
-                        uint32_t rs1, uint32_t rs2, uint32_t rd, uint32_t imm,
-                        char *instruction_name, char **x_label)
+                       uint32_t rs1, uint32_t rs2, uint32_t rd, uint32_t imm,
+                       char *instruction_name, char **x_label)
 {
     char tipo = tolower(buffer[0]);
     sprintf(col1_addr, "0x%08x:%s", pc, instruction_name);
-    if (tipo == 'r'){
+    if (tipo == 'r')
+    {
         sprintf(col2_inst, "%s,%s,%s", x_label[rd], x_label[rs1], x_label[rs2]);
-    } 
-    else if (tipo == 'i'){
-        if(strcmp(especific_instruction, "print_imm") == 0)
+    }
+    else if (tipo == 'i')
+    {
+        if (strcmp(especific_instruction, "print_imm") == 0)
         {
             sprintf(col2_inst, "%s,%s,%u", x_label[rd], x_label[rs1], imm);
         }
@@ -295,15 +592,19 @@ void print_instruction(char *buffer, char *especific_instruction, char *col1_add
             sprintf(col2_inst, "%s,%s,0x%03x", x_label[rd], x_label[rs1], imm & 0xFFF);
         }
     }
-    else if (tipo == 'c'){
-        if (strcmp(especific_instruction, "nind") == 0){
-            sprintf(col2_inst, "");
+    else if (tipo == 'c')
+    {
+        if (strcmp(especific_instruction, "nind") == 0)
+        {
+            sprintf(col2_inst, " ");
         }
     }
-    else if (tipo == 's'){
+    else if (tipo == 's')
+    {
         sprintf(col2_inst, "%s,0x%03x(%s)", x_label[rs2], (uint16_t)(imm & 0xFFF), x_label[rs1]);
     }
-    else if (tipo == 'b'){
+    else if (tipo == 'b')
+    {
         sprintf(col2_inst, "%s,%s,0x%03x", x_label[rs1], x_label[rs2], imm >> 1);
     }
 }
@@ -325,16 +626,7 @@ int main(int argc, char *argv[])
         fclose(input);
         exit(128);
     };
-    FILE *log = fopen("log.txt", "w");
-    if (!log)
-    {
-        perror("Erro ao abrir arquivo de log");
-        fclose(input);
-        fclose(output);
-        exit(128);
-    };
 
-    const uint32_t offset = 0x80000000;
     // declarando registradores
     const char *x_label[32] = {
         "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0",
@@ -347,49 +639,53 @@ int main(int argc, char *argv[])
         perror("Erro ao alocar memória para memória");
         fclose(input);
         fclose(output);
-        fclose(log);
         return 1;
     }
 
+    memset(mem, 0, MEM_SIZE);
+
     char token[32];
-    size_t i = 0;
+    uint32_t current_index = 0;
+    uint32_t offset = 0;
+
     while (fscanf(input, "%31s", token) == 1)
     {
         if (token[0] == '@')
         {
+            if (sscanf(token + 1, "%x", &offset) == 1)
+            {
+                uint32_t new_index = offset - OFFSET_RAM;
+                current_index = new_index;
+            }
             continue;
         }
+
         unsigned int valor;
         if (sscanf(token, "%x", &valor) == 1)
         {
-            if (i < MEM_SIZE)
+            if (current_index < MEM_SIZE)
             {
-                mem[i++] = (uint8_t)valor;
+                mem[current_index] = (uint8_t)valor;
+                current_index++;
             }
         }
     }
 
     // Inicializando variáveis
     CSR_REG csr = {0};
+    UART_REG uart = {0};
+    PLIC_REG plic = {0};
     uint8_t run = 1;
-    uint32_t pc = offset;
+    uint32_t pc = OFFSET_RAM;
     uint32_t x[32] = {0};
     uint32_t msip = 0;
     uint64_t mtime = 0, mtimecmp = -1;
     char col1_addr[40];
     char col2_inst[60];
     char col3_details[128];
-    char especific_instruction[128];
 
     while (run)
     {
-        // Incrementa o timer
-        mtime++;
-        if (mtime >= mtimecmp)
-            csr.mip |= (1 << 7);
-        else
-            csr.mip &= ~(1 << 7);
-
         // Verifica bit de interrupção de software
         if (msip & 1)
             csr.mip |= (1 << 3);
@@ -399,15 +695,36 @@ int main(int argc, char *argv[])
         uint32_t mstatus = csr_r(0x300, &csr);
         uint32_t mie = csr_r(0x304, &csr);
         uint32_t mip = csr.mip;
-        bool global_enable = (mstatus >> 3) & 1;
+        // Verifica se há interrupção de hardware(UART)
+        bool plic_signal = ((plic.pending[0] & plic.enable[0][0]) && (plic.priority[10] > plic.threshold[0]));
+        if (plic_signal)
+        {
+            csr.mip |= (1 << 11);
+        }
+        else 
+        {
+            csr.mip &= ~(1 << 11);
+        }
 
+        bool external_interrupt = ((csr.mip & (1 << 11)) && (mie & (1 << 11)) && (mstatus & 0x08));
+        if (external_interrupt) {
+            interruption_handler(&csr, &pc, 11, 0);
+            uint32_t mepc = csr_r(0x341, &csr);
+            uint32_t mcause = csr_r(0x342, &csr);
+            uint32_t mtval = csr_r(0x343, &csr);
+            print(1, mepc, mtval, mcause, "external", output);
+            continue; 
+        }
+        
+        bool global_enable = (mstatus >> 3) & 1;
+        
         // Verifica se há interrupção de software
         bool soft_enable = (mie >> 3) & 1;
         bool soft_pending = (mip >> 3) & 1;
         bool soft_interrupt = global_enable && soft_enable && soft_pending;
         if (soft_interrupt)
         {
-            interruption_handler(&csr, &pc, 3, 0, log);
+            interruption_handler(&csr, &pc, 3, 0);
             uint32_t mepc = csr_r(0x341, &csr);
             uint32_t mcause = csr_r(0x342, &csr);
             uint32_t mtval = csr_r(0x343, &csr);
@@ -415,13 +732,20 @@ int main(int argc, char *argv[])
             continue;
         }
 
+        // Incrementa o timer
+        mtime++;
+        if (mtime >= mtimecmp)
+            csr.mip |= (1 << 7); 
+        else
+            csr.mip &= ~(1 << 7);
+            
         // Verifica se há interrupção de timer
         bool timer_enable = (mie >> 7) & 1;
         bool timer_pending = (mip >> 7) & 1;
         bool timer_interrupt = global_enable && timer_enable && timer_pending;
         if (timer_interrupt)
         {
-            interruption_handler(&csr, &pc, 7, 0, log);
+            interruption_handler(&csr, &pc, 7, 0);
             uint32_t mepc = csr_r(0x341, &csr);
             uint32_t mcause = csr_r(0x342, &csr);
             uint32_t mtval = csr_r(0x343, &csr);
@@ -430,9 +754,9 @@ int main(int argc, char *argv[])
         }
 
         // Verifica se há exceção de instrução inválida
-        if (pc >= MAX_RAM || pc < offset)
+        if (pc >= MAX_RAM || pc < OFFSET_RAM)
         {
-            exception_handler(&csr, &pc, 1, pc, log);
+            exception_handler(&csr, &pc, 1, pc);
             uint32_t mcause = csr_r(0x342, &csr);
             uint32_t mtval = csr_r(0x343, &csr);
             uint32_t mepc = csr_r(0x341, &csr);
@@ -441,17 +765,17 @@ int main(int argc, char *argv[])
         }
 
         // Fetch
-        const uint32_t instruction = ((uint32_t *)(mem))[(pc - offset) >> 2];
+        const uint32_t instruction = ((uint32_t *)(mem))[(pc - OFFSET_RAM) >> 2];
         const uint8_t opcode = instruction & 0b1111111;
         const uint8_t funct7 = instruction >> 25;
         const uint8_t funct3 = (instruction & (0b111 << 12)) >> 12;
-        // Imediato de 12 e 7 bits, tipos b e s, respectivamente 
+        // Imediato de 12 e 7 bits, tipos b e s, respectivamente
         const uint16_t imm = (instruction >> 20) & 0b111111111111;
         const uint8_t uimm = (instruction & (0b11111 << 20)) >> 20;
         const uint16_t imm_b = ((instruction >> 31) & 0b1) << 12 |
-                                ((instruction >> 7) & 0b1) << 11 |
-                                ((instruction >> 25) & 0b111111) << 5 |
-                                ((instruction >> 8) & 0b1111) << 1;
+                               ((instruction >> 7) & 0b1) << 11 |
+                               ((instruction >> 25) & 0b111111) << 5 |
+                               ((instruction >> 8) & 0b1111) << 1;
         const uint16_t imm_s =
             ((instruction >> 25) & 0b1111111) << 5 | ((instruction >> 7) & 0b11111);
         // Registradores de uso geral e uso especifico
@@ -616,7 +940,7 @@ int main(int argc, char *argv[])
             {
                 const uint32_t data =
                     (x[rs2] == 0) ? 0xFFFFFFFF
-                                    : (uint32_t)((int32_t)x[rs1] / (int32_t)x[rs2]);
+                                  : (uint32_t)((int32_t)x[rs1] / (int32_t)x[rs2]);
                 if (rd != 0)
                     x[rd] = data;
                 print_instruction(buffer_type, "", col1_addr, col2_inst, pc, rs1, rs2, rd, 0, "div",
@@ -638,7 +962,7 @@ int main(int argc, char *argv[])
             {
                 const uint32_t data =
                     (x[rs2] == 0) ? x[rs1]
-                                    : (uint32_t)((int32_t)x[rs1] % (int32_t)x[rs2]);
+                                  : (uint32_t)((int32_t)x[rs1] % (int32_t)x[rs2]);
                 if (rd != 0)
                     x[rd] = data;
                 print_instruction(buffer_type, "", col1_addr, col2_inst, pc, rs1, rs2, rd, 0, "rem",
@@ -656,16 +980,16 @@ int main(int argc, char *argv[])
                 sprintf(col3_details, "%s=0x%08x%%0x%08x=0x%08x", x_label[rd], x[rs1],
                         x[rs2], data);
             }
-                    fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
+            fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
             break;
         }
         // tipo I
         case 0b0010011:
         {
             uint32_t rs1_antigo = x[rs1];
-            char *buffer_type = "I"; 
+            char *buffer_type = "I";
             const int32_t simm = (imm >> 11) ? (0xFFFFF000 | imm) : (imm);
-            
+
             if (funct3 == 0b001)
             {
                 const uint32_t data = x[rs1] << uimm;
@@ -718,7 +1042,7 @@ int main(int argc, char *argv[])
                     x[rd] = data;
                 print_instruction(buffer_type, "", col1_addr, col2_inst, pc, rs1, rs2, rd, imm, "xori", (char **)x_label);
                 sprintf(col3_details, "%s=0x%08x^0x%08x=0x%08x", x_label[rd], rs1_antigo,
-                        imm, data);
+                        simm, data);
             }
             else if (funct3 == 0b111)
             {
@@ -727,7 +1051,7 @@ int main(int argc, char *argv[])
                     x[rd] = data;
                 print_instruction(buffer_type, "", col1_addr, col2_inst, pc, rs1, rs2, rd, imm, "andi", (char **)x_label);
                 sprintf(col3_details, "%s=0x%08x&0x%08x=0x%08x", x_label[rd], rs1_antigo,
-                        imm, data);
+                        simm, data);
             }
             else if (funct3 == 0b110)
             {
@@ -736,7 +1060,7 @@ int main(int argc, char *argv[])
                     x[rd] = data;
                 print_instruction(buffer_type, "", col1_addr, col2_inst, pc, rs1, rs2, rd, imm, "ori", (char **)x_label);
                 sprintf(col3_details, "%s=0x%08x|0x%08x=0x%08x", x_label[rd], rs1_antigo,
-                        imm, data);
+                        simm, data);
             }
             else if (funct3 == 0b000)
             {
@@ -745,7 +1069,7 @@ int main(int argc, char *argv[])
                     x[rd] = data;
                 print_instruction(buffer_type, "", col1_addr, col2_inst, pc, rs1, rs2, rd, imm, "addi", (char **)x_label);
                 sprintf(col3_details, "%s=0x%08x+0x%08x=0x%08x", x_label[rd], rs1_antigo,
-                        imm, data);
+                        simm, data);
             }
 
             fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
@@ -773,90 +1097,94 @@ int main(int argc, char *argv[])
         {
             const uint32_t simm = (imm >> 11) ? (0xFFFFF000 | imm) : (imm);
             const uint32_t address = x[rs1] + simm;
-            char *buffer_type = "I"; 
-            
+            char *buffer_type = "I";
+            bool RAM = (address >= OFFSET_RAM && address + 4 <= MAX_RAM);
+            bool CLINT = (address >= OFFSET_CLINT && address <= MAX_CLINT);
+            bool UART = (address >= OFFSET_UART && address <= MAX_UART);
+            bool PLIC = (address >= OFFSET_PLIC && address <= MAX_PLIC);
+            bool is_valid = (RAM || UART || CLINT || PLIC);
+
             if (funct3 == 0b000)
             {
-                if (address >= MAX_RAM || address < OFFSET_RAM)
+                if (!is_valid)
                 {
                     print(0, pc, address, 5, "load_fault", output);
-                    exception_handler(&csr, &pc, 5, address, log);
+                    exception_handler(&csr, &pc, 5, address);
                     continue;
                 }
 
-                const int8_t data = *((int8_t *)(mem + address - offset));
+                const int8_t data = load(&plic, &uart, mem, address, 1, mtime, mtimecmp, msip);
                 if (rd != 0)
                     x[rd] = (int32_t)data;
-                
+
                 print_instruction(buffer_type, "load", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "lb", (char **)x_label);
                 sprintf(col3_details, "%s=mem[0x%08x]=0x%08x", x_label[rd], address, data);
             }
             else if (funct3 == 0b100)
             {
-                if (address >= MAX_RAM || address < OFFSET_RAM)
+                if (!is_valid)
                 {
                     print(0, pc, address, 5, "load_fault", output);
-                    exception_handler(&csr, &pc, 5, address, log);
+                    exception_handler(&csr, &pc, 5, address);
                     continue;
                 }
 
-                const uint8_t data = *((uint8_t *)(mem + address - offset));
+                const uint8_t data = load(&plic, &uart, mem, address, 1, mtime, mtimecmp, msip);
                 if (rd != 0)
                     x[rd] = (uint8_t)data;
-                
+
                 print_instruction(buffer_type, "load", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "lbu", (char **)x_label);
                 sprintf(col3_details, "%s=mem[0x%08x]=0x%08x", x_label[rd], address, (uint8_t)data);
             }
             else if (funct3 == 0b001)
             {
-                if (address + 2 >= MAX_RAM || address < OFFSET_RAM)
+                if (!is_valid)
                 {
                     print(0, pc, address, 5, "load_fault", output);
-                    exception_handler(&csr, &pc, 5, address, log);
+                    exception_handler(&csr, &pc, 5, address);
                     continue;
                 }
 
-                const int16_t data = *((uint16_t *)(mem + address - offset));
+                const int16_t data = load(&plic, &uart, mem, address, 2, mtime, mtimecmp, msip);
                 if (rd != 0)
                     x[rd] = (int32_t)data;
 
                 print_instruction(buffer_type, "load", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "lh", (char **)x_label);
                 sprintf(col3_details, "%s=mem[0x%08x]=0x%08x", x_label[rd], address, data);
             }
-            else if (funct3 == 0b101) 
+            else if (funct3 == 0b101)
             {
-                if (address + 2 >= MAX_RAM || address < OFFSET_RAM)
+                if (!is_valid)
                 {
                     print(0, pc, address, 5, "load_fault", output);
-                    exception_handler(&csr, &pc, 5, address, log);
+                    exception_handler(&csr, &pc, 5, address);
                     continue;
                 }
 
-                const uint16_t data = *((uint16_t *)(mem + address - offset));
+                const uint16_t data = load(&plic, &uart, mem, address, 2, mtime, mtimecmp, msip);
                 if (rd != 0)
                     x[rd] = (uint32_t)data;
-                
+
                 print_instruction(buffer_type, "load", col1_addr, col2_inst, pc, rs1, rs2, rd, imm, "lhu", (char **)x_label);
                 sprintf(col3_details, "%s=mem[0x%08x]=0x%08x", x_label[rd], address, data);
             }
-            else if (funct3 == 0b010) 
+            else if (funct3 == 0b010)
             {
-                bool RAM = (address >= OFFSET_RAM && address <= MAX_RAM);
-                bool CLINT = (address >= OFFSET_CLINT && address <= MAX_CLINT);
-                if (!RAM && !CLINT)
+                if (!is_valid)
                 {
                     print(0, pc, address, 5, "load_fault", output);
-                    exception_handler(&csr, &pc, 5, address, log);
+                    exception_handler(&csr, &pc, 5, address);
                     continue;
                 }
-                const uint32_t data = load(mem, address, mtime, mtimecmp, msip);
+                const uint32_t data = load(&plic, &uart, mem, address, 4, mtime, mtimecmp, msip);
                 if (rd != 0)
                     x[rd] = data;
-                
+
                 print_instruction(buffer_type, "load", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "lw", (char **)x_label);
                 sprintf(col3_details, "%s=mem[0x%08x]=0x%08x", x_label[rd], address, data);
-                }
-                fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
+            }
+
+            fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
             break;
         }
         case 0b1110011:
@@ -866,7 +1194,7 @@ int main(int argc, char *argv[])
             // Pega o registrador CSR e constroi o operando
             uint32_t csr_antigo = csr_r(csr_address, &csr);
             uint32_t operando;
-            if (funct3 & 0b100) 
+            if (funct3 & 0b100)
                 // imediato
                 operando = (uint32_t)rs1;
             else
@@ -876,20 +1204,20 @@ int main(int argc, char *argv[])
             if (funct3 == 0b000 && imm == 1)
             {
                 print_instruction(buffer_type, "nind", col1_addr, col2_inst, pc, rs1, rs2, rd, 0, "ebreak", (char **)x_label);
-                sprintf(col3_details, "");
-                const uint32_t previous = ((uint32_t *)(mem))[(pc - 4 - offset) >> 2];
-                const uint32_t next = ((uint32_t *)(mem))[(pc + 4 - offset) >> 2];
-                if (previous == 0x01f01013 && next == 0x40705013)
-                    run = 0;
+                // const uint32_t previous = ((uint32_t *)(mem))[(pc - 4 - offset) >> 2];
+                // const uint32_t next = ((uint32_t *)(mem))[(pc + 4 - offset) >> 2];
+                // if (previous == 0x01f01013 && next == 0x40705013)
+                sprintf(col3_details, " ");
+                run = 0;
             }
             // ECALL
             else if (imm == 0)
             {
                 print_instruction(buffer_type, "nind", col1_addr, col2_inst, pc, rs1, rs2, rd, 0, "ecall", (char **)x_label);
-                sprintf(col3_details, "");
+                sprintf(col3_details, " ");
                 fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
                 print(0, pc, 0, 11, "environment_call", output);
-                exception_handler(&csr, &pc, 11, 0, log);
+                exception_handler(&csr, &pc, 11, 0);
                 continue;
             }
             // MRET
@@ -917,7 +1245,7 @@ int main(int argc, char *argv[])
                 csr_w(&csr, csr_address, new_data);
 
                 if (funct3 == 0b001)
-                { 
+                {
                     sprintf(col1_addr, "0x%08x:csrrw", pc);
                     sprintf(col2_inst, "%s,%s,%s", x_label[rd], csr_get_name(csr_address),
                             x_label[rs1]);
@@ -926,7 +1254,7 @@ int main(int argc, char *argv[])
                             csr_get_name(csr_address), x_label[rs1], new_data);
                 }
                 else
-                { 
+                {
                     sprintf(col1_addr, "0x%08x:csrrwi", pc);
                     sprintf(col2_inst, "%s,%s,0x%05x", x_label[rd],
                             csr_get_name(csr_address), operando);
@@ -944,7 +1272,7 @@ int main(int argc, char *argv[])
                 }
 
                 if (funct3 == 0b010)
-                { 
+                {
                     sprintf(col1_addr, "0x%08x:csrrs", pc);
                     sprintf(col2_inst, "%s,%s,%s", x_label[rd], csr_get_name(csr_address),
                             x_label[rs1]);
@@ -954,7 +1282,7 @@ int main(int argc, char *argv[])
                             new_data);
                 }
                 else
-                { 
+                {
                     sprintf(col1_addr, "0x%08x:csrrsi", pc);
                     sprintf(col2_inst, "%s,%s,0x%05x", x_label[rd],
                             csr_get_name(csr_address), operando);
@@ -972,7 +1300,7 @@ int main(int argc, char *argv[])
                 }
 
                 if (funct3 == 0b011)
-                { 
+                {
                     sprintf(col1_addr, "0x%08x:csrrc", pc);
                     sprintf(col2_inst, "%s,%s,%s", x_label[rd], csr_get_name(csr_address),
                             x_label[rs1]);
@@ -982,7 +1310,7 @@ int main(int argc, char *argv[])
                             new_data);
                 }
                 else
-                { 
+                {
                     sprintf(col1_addr, "0x%08x:csrrci", pc);
                     sprintf(col2_inst, "%s,%s,0x%05x", x_label[rd],
                             csr_get_name(csr_address), operando);
@@ -993,7 +1321,7 @@ int main(int argc, char *argv[])
                             new_data);
                 }
             }
-            
+
             fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
             if (funct3 != 0 && rd != 0)
                 x[rd] = csr_antigo;
@@ -1010,39 +1338,39 @@ int main(int argc, char *argv[])
 
             if (funct3 == 0b000)
             {
-                *((uint8_t *)(mem + address - offset)) = (uint8_t)data_change;
+                if (store(&plic, &uart, mem, 1, address, data_change, &mtimecmp, &msip) != 0)
+                {
+                    print(0, pc, address, 7, "store_fault", output);
+                    exception_handler(&csr, &pc, 7, address);
+                    continue;
+                };
+
                 print_instruction(buffer_type, "", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "sb", (char **)x_label);
                 sprintf(col3_details, "mem[0x%08x]=0x%02x", address, data_change);
             }
             else if (funct3 == 0b001)
             {
-                if (address + 2 > MAX_RAM || address < OFFSET_RAM)
+                if (store(&plic, &uart, mem, 2, address, data_change, &mtimecmp, &msip) != 0)
                 {
                     print(0, pc, address, 7, "store_fault", output);
-                    exception_handler(&csr, &pc, 7, address, log);
+                    exception_handler(&csr, &pc, 7, address);
                     continue;
-                }
+                };
 
-                *((uint16_t *)(mem + address - offset)) = (uint16_t)data_change;
                 print_instruction(buffer_type, "", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "sh", (char **)x_label);
                 sprintf(col3_details, "mem[0x%08x]=0x%04x", address, data_change);
             }
-            else if (funct3 == 0b010) 
+            else if (funct3 == 0b010)
             {
-                bool RAM = (address >= OFFSET_RAM && address + 4 <= MAX_RAM);
-                bool CLINT = (address >= OFFSET_CLINT && address <= MAX_CLINT);
-                if (!RAM && !CLINT)
+                if (store(&plic, &uart, mem, 4, address, data_change, &mtimecmp, &msip) != 0)
                 {
                     print(0, pc, address, 7, "store_fault", output);
-                    exception_handler(&csr, &pc, 7, address, log);
+                    exception_handler(&csr, &pc, 7, address);
                     continue;
-                }
-                store(mem, address, data_change, &mtimecmp, &msip);
-
+                };
                 print_instruction(buffer_type, "", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "sw", (char **)x_label);
                 sprintf(col3_details, "mem[0x%08x]=0x%08x", address, data_change);
             }
-
             fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
             break;
         }
@@ -1053,7 +1381,7 @@ int main(int argc, char *argv[])
             const uint32_t address = pc + simm;
             int condition = 0;
             char *buffer_type = "B";
-            
+
             if (funct3 == 0b000)
             {
                 condition = (int32_t)x[rs1] == (int32_t)x[rs2];
@@ -1124,7 +1452,7 @@ int main(int argc, char *argv[])
             if (rd != 0)
                 x[rd] = data;
 
-            // Para o log, podemos mostrar os 20 bits originais
+            // Para o , podemos mostrar os 20 bits originais
             const uint32_t imm20_for_log = (uint32_t)imm_u_val >> 12;
             sprintf(col1_addr, "0x%08x:auipc", pc);
             sprintf(col2_inst, "%s,0x%05x", x_label[rd], imm20_for_log & 0xFFFFF);
@@ -1162,7 +1490,7 @@ int main(int argc, char *argv[])
         }
         default:
         {
-            exception_handler(&csr, &pc, 2, instruction, log);
+            exception_handler(&csr, &pc, 2, instruction);
             uint32_t mcause = csr_r(0x342, &csr);
             uint32_t mepc = csr_r(0x341, &csr);
             uint32_t mtval = csr_r(0x343, &csr);
@@ -1176,7 +1504,6 @@ int main(int argc, char *argv[])
     free(mem);
     fclose(output);
     fclose(input);
-    fclose(log);
     printf("---------------------------------------------------------------------"
             "-----------\n");
     return 0;
