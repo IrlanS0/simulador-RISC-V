@@ -1,74 +1,83 @@
 .text
-.global main
 
-# ==============================================================================
-# 1. FUNÇÕES DE IO (CORREÇÃO DO LOOP INFINITO NO FIM DO ARQUIVO)
-# ==============================================================================
+# --- SCANF ---
+scanf:
+    getchar:
+        # Base UART
+        li t4, 0x10000000
+        # Acumulador
+        li a0, 0           
+        # Flag de sinal
+        li t1, 0
 
-# --- GETCHAR ---
-getchar:
-    li t4, 0x10000000   # Base UART
-    li a0, 0            # Acumulador
-    li t1, 0            # Sinal
+    # Econtrar o início do número (Pular espaços)
+    esperar_digito:
+        #Polling para esperar cadeia de números começar
+        lb t0, 5(t4)
+        andi t0, t0, 1
+        beq t0, zero, esperar_digito 
 
-# 1. ESPERA BLOQUEANTE (Para encontrar o início do número)
-wait_start:
-    lb t0, 5(t4)
-    andi t0, t0, 1
-    beq t0, zero, wait_start  # Aqui TEM que esperar
-    
-    lb t0, 0(t4)        # Lê char
-    
-    li t2, 32
-    ble t0, t2, wait_start
-    
-    li t2, 45
-    bne t0, t2, process_digit
-    li t1, 1            # Negativo
-    # Se leu sinal, tenta ler o próximo dígito
-    j try_read_digit
+        # Se passou, lê o char
+        lb t0, 0(t4)
+        
+        # 32 na tabela ASCCI é: Espaço, Table ou Enter
+        # Pula para esperar início do char caso seja < 32
+        li t2, 32
+        ble t0, t2, esperar_digito
+        
+        # Caso seja um sinal de "-" (ASCII = 45) ativa a flag e tenta ler o char
+        li t2, 45
+        bne t0, t2, atoi
+        # Flag de negativo
+        li t1, 1
+        # Se leu sinal, tenta ler o próximo dígito
+        j ler_digito_restante
+    # Lógica da função ATOI (ASCII TO INT)
+    atoi:
+        # Se não foi '-', o char atual já é um dígito
+        j calcular_digito
 
-process_digit:
-    # Se não foi '-', o char atual já é um dígito
-    j calc_digit_logic
+    # Lê o restante do número
+    ler_digito_restante:
+        # Verifica status
+        lb t2, 5(t4)
+        andi t2, t2, 1
 
-# 2. ESPERA NÃO-BLOQUEANTE (Para ler o restante do número)
-try_read_digit:
-    # Verifica status
-    lb t2, 5(t4)
-    andi t2, t2, 1
-    
-    # CORREÇÃO CRÍTICA:
-    # Se não tem dado pronto (status=0) AGORA, assumimos que o número acabou.
-    # (Resolve o bug do arquivo sem Enter no final)
-    beq t2, zero, finish_read
-    
-    # Se tem dado, lê
-    lb t0, 0(t4)
+        # Se não tem dado pronto (t2=0), assumimos que o número acabou.
+        beq t2, zero, finalizar_leitura
 
-calc_digit_logic:
-    # Verifica se é dígito
-    li t2, 48
-    blt t0, t2, finish_read
-    li t2, 57
-    bgt t0, t2, finish_read
+        # Se tem dado, lê
+        lb t0, 0(t4)
 
-    # Acumula
-    addi t0, t0, -48
-    li t3, 10
-    mul a0, a0, t3
-    add a0, a0, t0
-    
-    # Continua lendo (mas agora em modo não-bloqueante)
-    j try_read_digit
+    calcular_digito:
+        # Verifica se é dígito
+        # Na tabela ASCII o dígito está entre 48(0) e 57(9)
+        li t2, 48
+        blt t0, t2, finalizar_leitura
+        li t2, 57
+        bgt t0, t2, finalizar_leitura
 
-finish_read:
-    beq t1, zero, ret_get
-    sub a0, zero, a0
-ret_get:
-    ret
+        # Lógica ATOI
+        # Valor(t0) = char(t0) - 48
+        addi t0, t0, -48
+        # Total(a0) = (total(a0) * 10(t3)) + valor(t0)
+        li t3, 10
+        mul a0, a0, t3
+        add a0, a0, t0
 
-# --- PUTCHAR (Escrita Turbo) ---
+        # Continua lendo
+        j ler_digito_restante
+
+    finalizar_leitura:
+        # Se a flag estiver desativada, retorna o número
+        # Se não, converte o número negativo em positivo
+        beq t1, zero, retornar_numero
+        sub a0, zero, a0
+    retornar_numero:
+        ret
+
+# PUTCHAR E ITOA, guardam toda a lógica do printf
+# --- PUTCHAR ---
 putchar:
     li t4, 0x10000000
     sb a0, 0(t4)
@@ -79,92 +88,98 @@ itoa:
     addi sp, sp, -16
     sw ra, 0(sp)
     
-    bne a0, zero, check_neg_i
+    bne a0, zero, checar_se_negativo
+    # Caso seja 0, imprime de uma vez
     li a0, 48
     call putchar
-    j itoa_end     
-check_neg_i:
-    bge a0, zero, conv_i
-    mv t0, a0           
+    j finalizar_itoa     
+checar_se_negativo:
+    # Se for > 0, imprime os dígitos
+    bge a0, zero, converte
+    # Se não, imprime sinal de menos e transforma dígito em positivo
+    mv t0, a0          
     li a0, 45
     call putchar
     sub a0, zero, t0    
-conv_i:
+converte:
+    # Declara contador e denominador da lógica ITOA
     li t0, 0            
     li t2, 10       
-push_d:
-    beq a0, zero, pop_d
+empilhar:
+    beq a0, zero, desempilhar
+    # Aqui mora a lógica ITOA (INT TO ASCCI) 
+    # Dividimos por 10 sucessivamente
+    # Guardamos o resto na pilha(sp) por que saem ao contrário
     rem t1, a0, t2      
     div a0, a0, t2      
     addi t1, t1, 48     
     addi sp, sp, -4
     sw t1, 0(sp)
     addi t0, t0, 1
-    j push_d
-pop_d: 
-    beq t0, zero, itoa_end
+    j empilhar
+desempilhar: 
+    beq t0, zero, finalizar_itoa
+    # Como já somamos 48 anteriormente para virar ASCII
+    # Apenas desempilhamos e chamamos a função PUTCHAR  
     lw a0, 0(sp)
     addi sp, sp, 4
     call putchar
     addi t0, t0, -1
-    j pop_d
-itoa_end:
+    j desempilhar
+finalizar_itoa:
     lw ra, 0(sp)
     addi sp, sp, 16
     ret
 
-# ==============================================================================
-# 2. HEAPSORT (Seguro e Rápido)
-# ==============================================================================
-
 # --- heapify ---
 heapify:
 heapify_loop:
-    mv t0, a2           # largest = i
+    mv t0, a2           # maior(a2) = i(t0)
     slli t5, a2, 2      
     add t5, a0, t5      
     lw t6, 0(t5)        # V[i]
     
     slli t1, a2, 1
-    addi t1, t1, 1      # left
-    addi t2, t1, 1      # right
+    addi t1, t1, 1      # Esquerda
+    addi t2, t1, 1      # Direita
 
-    # Check Left
-    bge t1, a1, check_right
+    # Checar esquerda
+    bge t1, a1, checar_direita
     slli t3, t1, 2      
     add t3, a0, t3
-    lw t4, 0(t3)        # V[left]
-    ble t4, t6, check_right 
+    lw t4, 0(t3)        # V[esquerda]
+    ble t4, t6, checar_direita 
     mv t0, t1           
     mv t6, t4           
 
-check_right:
-    # Check Right
-    bge t2, a1, check_swap
+checar_direita:
+    # Checar direita
+    bge t2, a1, checar_troca
     slli t3, t2, 2      
     add t3, a0, t3
-    lw t4, 0(t3)        # V[right]
-    ble t4, t6, check_swap
+    lw t4, 0(t3)        # V[Direita]
+    ble t4, t6, checar_troca
     mv t0, t2           
 
-check_swap:
-    beq t0, a2, heapify_end_ret
+checar_troca:
+    beq t0, a2, fim_heapify
     slli t3, a2, 2      
     add t3, a0, t3      
     lw t4, 0(t3)        # V[i]
     slli t5, t0, 2      
     add t5, a0, t5      
-    lw t6, 0(t5)        # V[largest]
+    lw t6, 0(t5)        # V[maior]
     sw t6, 0(t3)
     sw t4, 0(t5)
     mv a2, t0
     j heapify_loop
 
-heapify_end_ret:
+fim_heapify:
     ret
 
 # --- heapsort ---
 heapsort:
+    # Inicializar
     addi sp, sp, -16
     sw ra, 0(sp)
     sw s0, 4(sp)
@@ -174,21 +189,21 @@ heapsort:
     mv s0, a0
     mv s1, a1
     
-    # 1. Build Heap
-    srli s2, s1, 1      # i = n / 2
+    # Constrói o Heap
+    # i(s2) = (n(s1) / 2) - 1
+    srli s2, s1, 1      
     addi s2, s2, -1
 
-build_loop:
-    blt s2, zero, extract_start
+loop_construir:
+    blt s2, zero, extrair_comeco
     mv a0, s0
     mv a1, s1
     mv a2, s2
     call heapify
     addi s2, s2, -1
-    j build_loop
+    j loop_construir
 
-    # 2. Extract
-extract_start:
+extrair_comeco:
     addi s2, s1, -1     # i = n - 1
 
 extract_loop:
@@ -215,34 +230,32 @@ sort_done:
     addi sp, sp, 16
     ret
 
-# ==============================================================================
-# 3. MAIN
-# ==============================================================================
+.globl main
 main:
     addi sp, sp, -16
     sw ra, 0(sp)
     sw s0, 4(sp)
     sw s1, 8(sp)
 
-    # 1. Ler N
-    call getchar
+    # ---> Ler N
+    call scanf
     mv s0, a0
     mv s2, a0
     la s1, input
 
-    beq s0, zero, fim_main
+    beq s0, zero, fim
 
-    # 2. Ler Vetor
-loop_rd: 
+    # ---> Ler Vetor
+loop_leitura: 
     beq s0, zero, do_sort
-    call getchar
+    call scanf
     sw a0, 0(s1)
     addi s1, s1, 4
     addi s0, s0, -1
-    j loop_rd
+    j loop_leitura
 
 do_sort:
-    # 3. Heapsort
+    # ---> Ordenar
     li t0, 1
     ble s2, t0, do_print
     la a0, input
@@ -250,22 +263,23 @@ do_sort:
     call heapsort
 
 do_print:
-    # 4. Imprimir
+    # ---> Imprimir vetor ordenado
     la s1, input
     mv s0, s2
 
 loop_wr:
-    beq s0, zero, fim_main
+    beq s0, zero, fim
     lw a0, 0(s1)
     call itoa
     addi s1, s1, 4
     addi s0, s0, -1
-    beq s0, zero, fim_main
-    li a0, 44           # ','
+    beq s0, zero, fim
+    li a0, 44           # Imprime ','
     call putchar
     j loop_wr
 
-fim_main:
+fim:
+    # ---> Finaliza programa
     lw s1, 8(sp)
     lw s0, 4(sp)
     lw ra, 0(sp)
@@ -273,7 +287,7 @@ fim_main:
     li a0, 0
     ret
 
-.section .data
+.data
 input:
-    .zero 4000
+    .space 4000
     
