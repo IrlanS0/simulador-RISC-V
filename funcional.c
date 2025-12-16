@@ -201,6 +201,9 @@ uint32_t uart_r(uint32_t add, UART_REG *uart)
     {
         uint32_t data = uart->rhr;
         uart->lsr &= ~0x01;
+        uart->rhr = 0;
+        if (data == 0)
+            printf("DEBUG: CPU leu 0 da UART! LSR=%d\n", uart->lsr);
         return data;
     }
     case 0b001:
@@ -220,7 +223,7 @@ uint32_t uart_r(uint32_t add, UART_REG *uart)
         return iir;
     }
     case 0b101:
-        return uart->lsr | 0x60;
+        return uart->lsr;
     default:
         return 0;
     }
@@ -234,7 +237,8 @@ void uart_w(UART_REG *uart, PLIC_REG *plic, uint32_t add, uint8_t data, FILE *te
         putchar((char)data);
         fflush(stdout);
 
-        if (term_out) {
+        if (term_out)
+        {
             fputc((char)data, term_out);
             fflush(term_out);
         }
@@ -492,11 +496,11 @@ int store(PLIC_REG *plic, UART_REG *uart, uint8_t *mem, uint8_t bytes, uint32_t 
         }
         else if (bytes == 2)
         {
-            *((uint16_t *)(mem + addr - OFFSET_RAM)) = (uint16_t)data;
+            data = *((uint16_t *)(mem + addr - OFFSET_RAM));
         }
         else if (bytes == 1)
         {
-            *((uint8_t *)(mem + addr - OFFSET_RAM)) = (uint8_t)data;
+            data = *((int8_t *)(mem + addr - OFFSET_RAM));
         }
         return 0;
     }
@@ -644,9 +648,11 @@ int main(int argc, char *argv[])
         }
     }
     FILE *term_out = NULL;
-    if (argc >= 5) { 
+    if (argc >= 5)
+    {
         term_out = fopen(argv[4], "w");
-        if (!term_out) {
+        if (!term_out)
+        {
             perror("Erro ao abrir qemu.terminal.out");
         }
     }
@@ -707,20 +713,36 @@ int main(int argc, char *argv[])
     char col1_addr[40];
     char col2_inst[60];
     char col3_details[128];
-
+    int ial = 0;
+    int iteracao = 0;
     while (run)
     {
-        if (term_in && !(uart.lsr & 0x01)) {
-            int c = fgetc(term_in); // Tenta pegar um char do arquivo
-            if (c != EOF) {
-                uart.rhr = (uint8_t)c; // Enche o buffer de recepção
-                uart.lsr |= 0x01;      // Levanta a bandeira "Tem dados!"
-                
-                // Se a interrupção de recepção estiver habilitada (IER bit 0)
-                if (uart.ier & 0x01) {
-                    plic.pending[0] |= (1 << 10); // Avisa o PLIC (ID 10)
+        iteracao++;
+        printf("UART.RHR[%d]\n", uart.rhr);
+        printf("O lsr esta em %d, iteracao %d\n", uart.lsr & 0x01, iteracao);
+        if (term_in && !(uart.lsr & 0x01))
+        {
+            int c = fgetc(term_in);
+            if (c != EOF)
+            {
+                ial++;
+                printf("Caractere[%d]:%c, iteracao: %d\n", ial, c, iteracao);
+                uart.rhr = (uint8_t)c;
+                uart.lsr |= 0x01; // Diz que tem dados (Data Ready)
+                if (c == '\n' || c == '\r' || c == 0)
+                {
+                    continue;
                 }
             }
+        }
+
+        // 2. Lógica de Disparo (Verifica persistente)
+        // Se tem dados (LSR bit 0) E a interrupção está habilitada (IER bit 0)
+        if ((uart.lsr & 0x01) && (uart.ier & 0x01))
+        {
+            plic.pending[0] |= (1 << 10); // Avisa o PLIC
+            // Se quiser debugar agora, coloque o print aqui:
+            printf("Interrupção Pendente! LSR=%x IER=%x\n", uart.lsr, uart.ier);
         }
         // Verifica bit de interrupção de software
         if (msip & 1)
