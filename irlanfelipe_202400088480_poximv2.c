@@ -18,7 +18,13 @@
 #define OFFSET_MTIME (OFFSET_CLINT + 0xbff8)
 #define PLIC_SOURCE_COUNT 1024
 #define PLIC_CONTEXT_COUNT 1
+int iter = 0;
+static FILE *log;
 
+void init_log(void)
+{
+    log = fopen("log.txt", "w");
+}
 typedef struct
 {
     // Registros de controle(CSRs)
@@ -213,10 +219,6 @@ uint32_t uart_r(uint32_t add, UART_REG *uart)
         {
             iir = 0x04;
         }
-        else if ((uart->lsr & 0x20) && (uart->ier & 0x02))
-        {
-            iir = 0x02;
-        }
         return iir;
     }
     case 0b101:
@@ -234,7 +236,8 @@ void uart_w(UART_REG *uart, PLIC_REG *plic, uint32_t add, uint8_t data, FILE *te
         putchar((char)data);
         fflush(stdout);
 
-        if (term_out) {
+        if (term_out)
+        {
             fputc((char)data, term_out);
             fflush(term_out);
         }
@@ -324,7 +327,8 @@ void exception_handler(CSR_REG *csr, uint32_t *pc, uint32_t cause,
     mstatus = (mstatus & ~(1 << 7)) | (mie << 7);
     // Zera o bit MIE(Desabilita interrupcoes globais)
     mstatus &= ~(1 << 3);
-    mstatus &= ~(0b11 << 11);
+    mstatus = (mstatus & ~(0b11 << 11)) | (0b11 << 11);
+    ;
 
     // Escreve o valor MIE no MSTATUS
     csr_w(csr, 0x300, mstatus);
@@ -347,7 +351,7 @@ void interruption_handler(CSR_REG *csr, uint32_t *pc, uint32_t cause,
 
     mstatus = (mstatus & ~(1 << 7)) | (mie << 7);
     mstatus &= ~(1 << 3);
-    mstatus |= (0b11 << 11);
+    mstatus = (mstatus & ~(0b11 << 11)) | (0b11 << 11);
     csr_w(csr, 0x300, mstatus);
 
     uint32_t mtvec = csr_r(0x305, csr);
@@ -380,13 +384,13 @@ uint32_t read_word(uint32_t addr, uint8_t *mem, uint8_t bytes, uint32_t index)
     }
     else
     {
-        int8_t word = *((int8_t *)(mem + addr - OFFSET_RAM));
+        uint8_t word = *((int8_t *)(mem + addr - OFFSET_RAM));
         return word;
     }
 }
 
 uint32_t load(PLIC_REG *plic, UART_REG *uart, uint8_t *mem, uint32_t addr, uint8_t bytes, uint64_t mtime, uint64_t mtimecmp,
-              uint32_t msip)
+            uint32_t msip)
 {
     uint32_t index = 0;
     // 1. UART
@@ -604,7 +608,7 @@ void print_instruction(char *buffer, char *especific_instruction, char *col1_add
     {
         if (strcmp(especific_instruction, "nind") == 0)
         {
-            sprintf(col2_inst, " ");
+            sprintf(col2_inst, "");
         }
     }
     else if (tipo == 's')
@@ -644,12 +648,15 @@ int main(int argc, char *argv[])
         }
     }
     FILE *term_out = NULL;
-    if (argc >= 5) { 
+    if (argc >= 5)
+    {
         term_out = fopen(argv[4], "w");
-        if (!term_out) {
+        if (!term_out)
+        {
             perror("Erro ao abrir qemu.terminal.out");
         }
     }
+    init_log();
 
     // declarando registradores
     const char *x_label[32] = {
@@ -708,30 +715,42 @@ int main(int argc, char *argv[])
     char col2_inst[60];
     char col3_details[128];
 
+    // Lendo arquivo term_in
+    char *term_in_buffer = NULL;
+    size_t term_in_size = 0;
+    size_t term_in_pos = 0;
+
+    if (term_in)
+    {
+        fseek(term_in, 0, SEEK_END);
+        term_in_size = ftell(term_in);
+        fseek(term_in, 0, SEEK_SET);
+        term_in_buffer = malloc(term_in_size);
+        fread(term_in_buffer, 1, term_in_size, term_in);
+        fclose(term_in);
+    }
     while (run)
     {
-        if (term_in && !(uart.lsr & 0x01)) {
-            int c = fgetc(term_in); // Tenta pegar um char do arquivo
-            if (c != EOF) {
-                uart.rhr = (uint8_t)c; // Enche o buffer de recepção
-                uart.lsr |= 0x01;      // Levanta a bandeira "Tem dados!"
-                
-                // Se a interrupção de recepção estiver habilitada (IER bit 0)
-                if (uart.ier & 0x01) {
-                    plic.pending[0] |= (1 << 10); // Avisa o PLIC (ID 10)
-                }
-            }
-        }
-        // Verifica bit de interrupção de software
-        if (msip & 1)
-            csr.mip |= (1 << 3);
+        // Incrementa o timer
+        mtime++;
+        if (mtime >= mtimecmp)
+            csr.mip |= (1 << 7);
         else
-            csr.mip &= ~(1 << 3);
+            csr.mip &= ~(1 << 7);
 
-        uint32_t mstatus = csr_r(0x300, &csr);
-        uint32_t mie = csr_r(0x304, &csr);
-        uint32_t mip = csr.mip;
-        // Verifica se há interrupção de hardware(UART)
+        iter++;
+        if (term_in_buffer && term_in_pos < term_in_size && !(uart.lsr & 0x01))
+        {
+            uart.rhr = (uint8_t)term_in_buffer[term_in_pos++];
+            uart.lsr |= 0x01;
+        }
+
+        if ((uart.lsr & 0x01) && (uart.ier & 0x01))
+        {
+            plic.pending[0] |= (1 << 10);
+        }
+
+        // Verifica se o PLIC mandou o sinal
         bool plic_signal = ((plic.pending[0] & plic.enable[0][0]) && (plic.priority[10] > plic.threshold[0]));
         if (plic_signal)
         {
@@ -742,7 +761,19 @@ int main(int argc, char *argv[])
             csr.mip &= ~(1 << 11);
         }
 
-        bool external_interrupt = ((csr.mip & (1 << 11)) && (mie & (1 << 11)) && (mstatus & 0x08));
+        // Verifica bit de interrupção de software
+        if (msip & 1)
+            csr.mip |= (1 << 3);
+        else
+            csr.mip &= ~(1 << 3);
+
+        uint32_t mstatus = csr_r(0x300, &csr);
+        uint32_t mie = csr_r(0x304, &csr);
+        uint32_t mip = csr.mip;
+        bool global_enable = (mstatus >> 3) & 1;
+
+        // Verifica se há interrupção de hardware(UART)
+        bool external_interrupt = global_enable && ((csr.mip & (1 << 11)) && (mie & (1 << 11)) && (mstatus & 0x08));
         if (external_interrupt)
         {
             interruption_handler(&csr, &pc, 11, 0);
@@ -752,8 +783,6 @@ int main(int argc, char *argv[])
             print(1, mepc, mtval, mcause, "external", output);
             continue;
         }
-
-        bool global_enable = (mstatus >> 3) & 1;
 
         // Verifica se há interrupção de software
         bool soft_enable = (mie >> 3) & 1;
@@ -768,13 +797,6 @@ int main(int argc, char *argv[])
             print(1, mepc, mtval, mcause, "software", output);
             continue;
         }
-
-        // Incrementa o timer
-        mtime++;
-        if (mtime >= mtimecmp)
-            csr.mip |= (1 << 7);
-        else
-            csr.mip &= ~(1 << 7);
 
         // Verifica se há interrupção de timer
         bool timer_enable = (mie >> 7) & 1;
@@ -793,7 +815,7 @@ int main(int argc, char *argv[])
         // Verifica se há exceção de instrução inválida
         if (pc >= MAX_RAM || pc < OFFSET_RAM)
         {
-            exception_handler(&csr, &pc, 1, pc);
+            exception_handler(&csr, &pc, 1, 0);
             uint32_t mcause = csr_r(0x342, &csr);
             uint32_t mtval = csr_r(0x343, &csr);
             uint32_t mepc = csr_r(0x341, &csr);
@@ -852,8 +874,8 @@ int main(int argc, char *argv[])
                 const uint32_t data = x[rs1] << x[rs2];
                 print_instruction(buffer_type, "", col1_addr, col2_inst, pc, rs1, rs2, rd, 0, "sll",
                                   (char **)x_label);
-                sprintf(col3_details, "%s=0x%08x<<0x%08x=0x%08x", x_label[rd], x[rs1],
-                        x[rs2], data);
+                sprintf(col3_details, "%s=0x%08x<<%u=0x%08x", x_label[rd], x[rs1],
+                        x[rs2] & 0x1F, data);
                 if (rd != 0)
                     x[rd] = data;
             }
@@ -862,8 +884,8 @@ int main(int argc, char *argv[])
                 const uint32_t data = x[rs1] >> x[rs2];
                 print_instruction(buffer_type, "", col1_addr, col2_inst, pc, rs1, rs2, rd, 0, "srl",
                                   (char **)x_label);
-                sprintf(col3_details, "%s=0x%08x>>0x%08x=0x%08x", x_label[rd], x[rs1],
-                        x[rs2], data);
+                sprintf(col3_details, "%s=0x%08x>>%u=0x%08x", x_label[rd], x[rs1],
+                        x[rs2] & 0x1F, data);
                 if (rd != 0)
                     x[rd] = data;
             }
@@ -872,8 +894,8 @@ int main(int argc, char *argv[])
                 const uint32_t data = (int32_t)x[rs1] >> x[rs2];
                 print_instruction(buffer_type, "", col1_addr, col2_inst, pc, rs1, rs2, rd, 0, "sra",
                                   (char **)x_label);
-                sprintf(col3_details, "%s=0x%08x>>>0x%08x=0x%08x", x_label[rd], x[rs1],
-                        x[rs2], data);
+                sprintf(col3_details, "%s=0x%08x>>>%u=0x%08x", x_label[rd], x[rs1],
+                        x[rs2] & 0x1F, data);
                 if (rd != 0)
                     x[rd] = data;
             }
@@ -1244,14 +1266,14 @@ int main(int argc, char *argv[])
                 // const uint32_t previous = ((uint32_t *)(mem))[(pc - 4 - offset) >> 2];
                 // const uint32_t next = ((uint32_t *)(mem))[(pc + 4 - offset) >> 2];
                 // if (previous == 0x01f01013 && next == 0x40705013)
-                sprintf(col3_details, " ");
                 run = 0;
+                sprintf(col3_details, "");
             }
             // ECALL
             else if (imm == 0)
             {
                 print_instruction(buffer_type, "nind", col1_addr, col2_inst, pc, rs1, rs2, rd, 0, "ecall", (char **)x_label);
-                sprintf(col3_details, " ");
+                sprintf(col3_details, "");
                 fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
                 print(0, pc, 0, 11, "environment_call", output);
                 exception_handler(&csr, &pc, 11, 0);
@@ -1267,6 +1289,7 @@ int main(int argc, char *argv[])
                 mstatus = (mstatus & ~(1 << 3)) | (current_mpie << 3);
                 // Habilita o bit MPIE e aceita interrupcoes globais
                 mstatus |= (1 << 7);
+                mstatus &= ~(0b11 << 11);
                 // Escreve o valor MPIE no MSTATUS
                 csr_w(&csr, 0x300, mstatus);
                 // Le o endereco de retorno na MEPC (0x341)
@@ -1307,7 +1330,10 @@ int main(int argc, char *argv[])
                     new_data = csr_antigo | operando;
                     csr_w(&csr, csr_address, new_data);
                 }
-
+                else
+                {
+                    new_data = csr_antigo;
+                } 
                 if (funct3 == 0b010)
                 {
                     sprintf(col1_addr, "0x%08x:csrrs", pc);
@@ -1335,7 +1361,10 @@ int main(int argc, char *argv[])
                     new_data = csr_antigo & (~operando);
                     csr_w(&csr, csr_address, new_data);
                 }
-
+                else
+                {
+                    new_data = csr_antigo;
+                }
                 if (funct3 == 0b011)
                 {
                     sprintf(col1_addr, "0x%08x:csrrc", pc);
@@ -1383,7 +1412,7 @@ int main(int argc, char *argv[])
                 };
 
                 print_instruction(buffer_type, "", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "sb", (char **)x_label);
-                sprintf(col3_details, "mem[0x%08x]=0x%02x", address, data_change);
+                sprintf(col3_details, "mem[0x%08x]=0x%02x", address, (uint8_t)data_change);
             }
             else if (funct3 == 0b001)
             {
@@ -1395,7 +1424,7 @@ int main(int argc, char *argv[])
                 };
 
                 print_instruction(buffer_type, "", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "sh", (char **)x_label);
-                sprintf(col3_details, "mem[0x%08x]=0x%04x", address, data_change);
+                sprintf(col3_details, "mem[0x%08x]=0x%04x", address, (uint16_t)data_change);
             }
             else if (funct3 == 0b010)
             {
@@ -1538,7 +1567,9 @@ int main(int argc, char *argv[])
     }
 
     free(mem);
-    fclose(term_in);
+    if (term_in_buffer)
+        free(term_in_buffer);
+    fclose(log);
     fclose(term_out);
     fclose(output);
     fclose(input);
