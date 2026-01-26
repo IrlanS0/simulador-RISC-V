@@ -26,7 +26,7 @@ endif
 OUTPUT_DIR = build
 
 # --- MUDANÇA: Definir TODOS os arquivos .c e .h ---
-SRCS = src/irlanfelipe_20240008480_poximv1.c
+SRCS = src/irlanfelipe_20240008480_poximv3.c
 # OBJS = $(SRCS:.c=.o)
 # HDRS = structs.h hash_table.h mergesort.h
 
@@ -41,14 +41,14 @@ all: $(EXECUTABLE)
 
 # --- MUDANÇA: Regra de LINKAGEM ---
 # O executável depende dos arquivos .o
-$(EXECUTABLE): $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LDFLAGS)
+$(EXECUTABLE):
+	$(CC) $(CFLAGS)
 
 # --- NOVO: Regra de COMPILAÇÃO (Pattern Rule) ---
 # Como transformar CADA .c em um .o
 # Se qualquer header (HDRS) mudar, recompila o .o
 %.o: %.c $(HDRS)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -c
 
 # --- Regra de Teste (Sem mudanças, mas depende de 'all') ---
 test: all $(OUTPUTS)
