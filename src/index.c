@@ -168,12 +168,12 @@ void evento_de_cache(CACHE *cache, int type_cache, FILE *output, uint32_t addr, 
     case 5:
         // drh
         name_event = "drh";
-        print_cache(cache, name_event, addr, output, 6, cache_index, i);
+        print_cache(cache, name_event, addr, output, 5, cache_index, i);
         break;
     case 6:
         // dwh
         name_event = "dwh";
-        print_cache(cache, name_event, addr, output, 5, cache_index, i);
+        print_cache(cache, name_event, addr, output, 6, cache_index, i);
         break;
     default:
         printf("Colocou o numero errado ai manezao\n");
@@ -181,7 +181,7 @@ void evento_de_cache(CACHE *cache, int type_cache, FILE *output, uint32_t addr, 
     }
 };
 
-void atualiza_lru(CACHE *cache, uint32_t cache_index, uint32_t current)
+void atualiza_lru(CACHE *cache)
 {
     for (uint32_t i = 0; i < NUM_SETS; i++){
         for (uint32_t j = 0; j < ASSOCIATIVITY; j++)
@@ -234,12 +234,11 @@ void salvar_na_ram(uint8_t *mem, CACHELINE *linha, uint32_t index)
     }
 }
 
-void acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_t cache_tag, uint32_t addr, FILE *output, char info_cache[15])
+void acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_t cache_tag, uint32_t addr, char info_cache[15], uint8_t bytes, uint32_t data, FILE *output)
 {
     int hit = 0;
     int id_hit, id_miss;
-    uint32_t bits_offset = log2(BLOCK_SIZE);
-    uint32_t bits_index = log2(NUM_SETS);
+    bool is_store = false;
 
     if (strcmp(info_cache, "instruction") == 0)
     {
@@ -251,30 +250,32 @@ void acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_t ca
         id_hit = 5;
         id_miss = 2;
     }
-    else
+    else if (strcmp(info_cache, "write") == 0)
     {
+        is_store = true;
         id_hit = 6;
         id_miss = 3;
     }
 
+    uint32_t via = 0xFFFFFFFF;
     for (uint32_t i = 0; i < cache->associativity; i++)
     {
+        if (is_store && cache->lines[cache_index][i].valid)
+        {
+            fprintf(logi, "Comparando tag de cache[%u]: 0x%07x com 0x%07x\n", cache_index, cache_tag, cache->lines[cache_index][i].id);
+        }
         if (cache->lines[cache_index][i].valid && cache->lines[cache_index][i].id == cache_tag)
         {
-            if (id_hit == 6){
-                cache->lines[cache_index][i].dirty = 1;
-            }
             cache->lines[cache_index][i].age = 0;
             evento_de_cache(cache, id_hit, output, addr, cache_index, i);
-            atualiza_lru(cache, cache_index, cache_tag);
             hit = 1;
+            via = i;
             break;
         }
     }
 
     if (!hit)
     {
-        uint32_t via = 0xFFFFFFFF;
         for (uint32_t i = 0; i < cache->associativity; i++)
         {
             if (!cache->lines[cache_index][i].valid)
@@ -283,31 +284,25 @@ void acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_t ca
                 break;
             }
         }
-
         if (via == 0xFFFFFFFF)
         {
             via = encontrar_lru(cache, cache_index);
         }
+        evento_de_cache(cache, id_miss, output, addr, cache_index, via); 
+    }
 
-        // if (cache->lines[cache_index][via].dirty && cache->lines[cache_index][via].valid){
-        //     salvar_na_ram(mem, &cache->lines[cache_index][via], cache_index);
-        // }
-        evento_de_cache(cache, id_miss, output, addr, cache_index, via);    
-        cache->lines[cache_index][via].id = cache_tag;
-        cache->lines[cache_index][via].valid = 1;
+    if (cache->lines[cache_index][via].dirty && cache->lines[cache_index][via].valid){
+        salvar_na_ram(mem, &cache->lines[cache_index][via], cache_index);
         cache->lines[cache_index][via].dirty = 0;
-        atualiza_lru(cache, cache_index, via);
+    }   
+    cache->lines[cache_index][via].id = cache_tag;
+    cache->lines[cache_index][via].valid = 1;
 
-        if(id_miss == 3)
-        {
-            cache->lines[cache_index][via].dirty = 1;
-        }
-
-        uint32_t block_addr = (addr / cache->block_size) * cache->block_size;
-        if (block_addr < OFFSET_RAM) {
-            printf("ERRO: acesso fora da RAM: addr=0x%08x\n", addr);
-            return;
-        }
+    uint32_t block_addr = (addr / cache->block_size) * cache->block_size;
+    if (block_addr < OFFSET_RAM) {
+        printf("ERRO: acesso fora da RAM: addr=0x%08x\n", addr);
+    }
+    else{
         uint32_t palavras = cache->block_size / 4;
         uint32_t base_idx = (block_addr - OFFSET_RAM) >> 2;
         for (uint32_t i = 0; i < palavras; i++)
@@ -315,6 +310,20 @@ void acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_t ca
             ((uint32_t *)cache->lines[cache_index][via].data)[i] = ((uint32_t *)mem)[base_idx + i];
         }
     }
+
+    if(is_store)
+    {
+        uint32_t offset = addr % cache->block_size;
+
+        if (bytes == 4)
+            *(uint32_t *)(cache->lines[cache_index][via].data + offset) = data;
+        else if (bytes == 2)
+            *(uint16_t *)(cache->lines[cache_index][via].data + offset) = (uint16_t)data;
+        else if (bytes == 1)
+            *(uint8_t *)(cache->lines[cache_index][via].data + offset) = (uint8_t)data;
+        cache->lines[cache_index][via].dirty = 1;
+    }
+    atualiza_lru(cache);
 };
 
 void plic_w(PLIC_REG *plic, uint32_t addr, uint32_t value)
@@ -599,8 +608,7 @@ void exception_handler(CSR_REG *csr, uint32_t *pc, uint32_t cause,
     *pc = (vetor & ~0x3);
 }
 
-void interruption_handler(CSR_REG *csr, uint32_t *pc, uint32_t cause,
-                          uint32_t tval)
+void interruption_handler(CSR_REG *csr, uint32_t *pc, uint32_t cause)
 {
     // MEPC recebe o codigo da proxima instrucao
     csr_w(csr, 0x341, *pc);
@@ -708,7 +716,7 @@ uint32_t load(PLIC_REG *plic, UART_REG *uart, uint8_t *mem, uint32_t addr, uint8
     return 0;
 }
 
-int store(CACHE *cache, PLIC_REG *plic, UART_REG *uart, uint8_t *mem, uint32_t cache_index, uint32_t cache_tag, uint8_t bytes, uint32_t addr, uint32_t data, uint64_t *mtimecmp, uint32_t *msip, FILE *term_out)
+int store(CACHE *cache, PLIC_REG *plic, UART_REG *uart, uint8_t *mem, uint32_t cache_index, uint32_t cache_tag, uint8_t bytes, uint32_t addr, uint32_t data, uint64_t *mtimecmp, uint32_t *msip, FILE *term_out, FILE *output)
 {
     // 1. UART
     if (addr >= OFFSET_UART && addr <= MAX_UART)
@@ -750,20 +758,7 @@ int store(CACHE *cache, PLIC_REG *plic, UART_REG *uart, uint8_t *mem, uint32_t c
     // 5. RAM
     if (addr >= OFFSET_RAM && (addr + bytes) < MAX_RAM)
     {
-        // acessar_cache(cache, mem, cache_index, cache_tag, addr, term_out, "write");
-        uint32_t index = (addr - OFFSET_RAM) >> 2;
-        if (bytes == 4)
-        {
-            ((uint32_t *)(mem))[index] = data;
-        }
-        else if (bytes == 2)
-        {
-            *((uint16_t *)(mem + addr - OFFSET_RAM)) = (uint16_t)data;
-        }
-        else if (bytes == 1)
-        {
-            *((uint8_t *)(mem + addr - OFFSET_RAM)) = (uint8_t)data;
-        }
+        acessar_cache(cache, mem, cache_index, cache_tag, addr, "write", bytes, data, output);
         return 0;
     }
 
@@ -883,17 +878,6 @@ void print_instruction(char *buffer, char *especific_instruction, char *col1_add
     }
 }
 
-void imprime_tags(CACHE *cache)
-{
-    for (uint32_t i = 0; i < cache->num_sets; i++)
-    {
-        for (uint32_t j = 0; j < cache->associativity; j++)
-        {
-            fprintf(logi, "TAG[%u][%u]--->0x%06x\n", i, j, cache->lines[i][j].id);
-        }
-    }
-};
-
 int main(int argc, char *argv[])
 {
     printf("---------------------------------------------------------------------"
@@ -930,7 +914,7 @@ int main(int argc, char *argv[])
         }
     }
     init_log();
-
+    
     // declarando registradores
     const char *x_label[32] = {
         "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0",
@@ -1009,9 +993,11 @@ int main(int argc, char *argv[])
     while (run)
     {
         // Verifica se instrucao esta na cache
+        uint8_t bts = 0;
+        uint32_t dados = 0;
         uint32_t cache_index = (pc >> bits_offset) & (NUM_SETS - 1);
         uint32_t cache_tag = pc >> (bits_offset + bits_index);
-        acessar_cache(&cache_i, mem, cache_index, cache_tag, pc, output, "instruction");
+        acessar_cache(&cache_i, mem, cache_index, cache_tag, pc, "instruction", bts, dados, output);
         // Incrementa o timer
         mtime++;
         if (mtime >= mtimecmp)
@@ -1056,7 +1042,7 @@ int main(int argc, char *argv[])
         bool external_interrupt = global_enable && ((csr.mip & (1 << 11)) && (mie & (1 << 11)) && (mstatus & 0x08));
         if (external_interrupt)
         {
-            interruption_handler(&csr, &pc, 11, 0);
+            interruption_handler(&csr, &pc, 11);
             uint32_t mepc = csr_r(0x341, &csr);
             uint32_t mcause = csr_r(0x342, &csr);
             uint32_t mtval = csr_r(0x343, &csr);
@@ -1070,7 +1056,7 @@ int main(int argc, char *argv[])
         bool soft_interrupt = global_enable && soft_enable && soft_pending;
         if (soft_interrupt)
         {
-            interruption_handler(&csr, &pc, 3, 0);
+            interruption_handler(&csr, &pc, 3);
             uint32_t mepc = csr_r(0x341, &csr);
             uint32_t mcause = csr_r(0x342, &csr);
             uint32_t mtval = csr_r(0x343, &csr);
@@ -1084,7 +1070,7 @@ int main(int argc, char *argv[])
         bool timer_interrupt = global_enable && timer_enable && timer_pending;
         if (timer_interrupt)
         {
-            interruption_handler(&csr, &pc, 7, 0);
+            interruption_handler(&csr, &pc, 7);
             uint32_t mepc = csr_r(0x341, &csr);
             uint32_t mcause = csr_r(0x342, &csr);
             uint32_t mtval = csr_r(0x343, &csr);
@@ -1105,7 +1091,7 @@ int main(int argc, char *argv[])
         
         // Fetch
         const uint32_t instruction = ((uint32_t *)(mem))[(pc - OFFSET_RAM) >> 2];
-        fprintf(logi, "INSTRUCTION=0x%08x--pc:0x%08x\n", instruction, pc);
+        // fprintf(logi, "INSTRUCTION=0x%08x--pc:0x%08x\n", instruction, pc);
         const uint8_t opcode = instruction & 0b1111111;
         const uint8_t funct7 = instruction >> 25;
         const uint8_t funct3 = (instruction & (0b111 << 12)) >> 12;
@@ -1454,7 +1440,7 @@ int main(int argc, char *argv[])
             if (RAM){
                 cache_index = (address >> bits_offset) & (NUM_SETS - 1);
                 cache_tag = address >> (bits_offset + bits_index);
-                acessar_cache(&cache_d, mem, cache_index, cache_tag, address, output, "read");
+                acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "read", bts, dados, output);
             }
 
             if (funct3 == 0b000)
@@ -1560,7 +1546,16 @@ int main(int argc, char *argv[])
                 const uint32_t previous = ((uint32_t *)(mem))[(pc - 4 - offset) >> 2];
                 const uint32_t next = ((uint32_t *)(mem))[(pc + 4 - offset) >> 2];
                 if (previous == 0x01f01013 && next == 0x40705013)
+                {
+                    cache_tag = (pc - 4) >> (bits_offset + bits_index);
+                    cache_index = ((pc - 4) >> bits_offset) & (NUM_SETS - 1);
+                    acessar_cache(&cache_i, mem, cache_index, cache_tag, pc - 4, "instruction", bts, dados, output);
+
+                    cache_tag = (pc + 4) >> (bits_offset + bits_index);
+                    cache_index = ((pc + 4) >> bits_offset) & (NUM_SETS - 1);
+                    acessar_cache(&cache_i, mem, cache_index, cache_tag, pc + 4, "instruction", bts, dados, output);
                     run = 0;
+                }
                 sprintf(col3_details, "");
             }
             // ECALL
@@ -1697,11 +1692,12 @@ int main(int argc, char *argv[])
             uint32_t data_change = x[rs2];
             cache_index = (address >> bits_offset) & (NUM_SETS - 1);
             cache_tag = address >> (bits_offset + bits_index);
-            acessar_cache(&cache_d, mem, cache_index, cache_tag, address, output, "write" );
+            // fprintf(logi, "Escrevendo na cache D - endereco: 0x%08x, index: %u, tag: 0x%08x\n", address, cache_index, cache_tag);
+            // acessar_cache(&cache_d, mem, cache_index, cache_tag, address, output, "write");
 
             if (funct3 == 0b000)
             {
-                if (store(&cache_d, &plic, &uart, mem, cache_index, cache_tag, 1, address, data_change, &mtimecmp, &msip, term_out) != 0)
+                if (store(&cache_d, &plic, &uart, mem, cache_index, cache_tag, 1, address, data_change, &mtimecmp, &msip, term_out, output) != 0)
                 {
                     print(0, pc, address, 7, "store_fault", output);
                     exception_handler(&csr, &pc, 7, address);
@@ -1713,7 +1709,7 @@ int main(int argc, char *argv[])
             }
             else if (funct3 == 0b001)
             {
-                if (store(&cache_d, &plic, &uart, mem, cache_index, cache_tag, 2, address, data_change, &mtimecmp, &msip, term_out) != 0)
+                if (store(&cache_d, &plic, &uart, mem, cache_index, cache_tag, 2, address, data_change, &mtimecmp, &msip, term_out, output) != 0)
                 {
                     print(0, pc, address, 7, "store_fault", output);
                     exception_handler(&csr, &pc, 7, address);
@@ -1725,7 +1721,7 @@ int main(int argc, char *argv[])
             }
             else if (funct3 == 0b010)
             {
-                if (store(&cache_d, &plic, &uart, mem, cache_index, cache_tag, 4, address, data_change, &mtimecmp, &msip, term_out) != 0)
+                if (store(&cache_d, &plic, &uart, mem, cache_index, cache_tag, 4, address, data_change, &mtimecmp, &msip, term_out, output) != 0)
                 {
                     print(0, pc, address, 7, "store_fault", output);
                     exception_handler(&csr, &pc, 7, address);
