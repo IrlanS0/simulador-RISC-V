@@ -260,10 +260,6 @@ void acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_t ca
     uint32_t via = 0xFFFFFFFF;
     for (uint32_t i = 0; i < cache->associativity; i++)
     {
-        if (is_store && cache->lines[cache_index][i].valid)
-        {
-            fprintf(logi, "Comparando tag de cache[%u]: 0x%07x com 0x%07x\n", cache_index, cache_tag, cache->lines[cache_index][i].id);
-        }
         if (cache->lines[cache_index][i].valid && cache->lines[cache_index][i].id == cache_tag)
         {
             cache->lines[cache_index][i].age = 0;
@@ -289,39 +285,46 @@ void acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_t ca
             via = encontrar_lru(cache, cache_index);
         }
         evento_de_cache(cache, id_miss, output, addr, cache_index, via); 
-    }
-
-    if (cache->lines[cache_index][via].dirty && cache->lines[cache_index][via].valid){
-        salvar_na_ram(mem, &cache->lines[cache_index][via], cache_index);
-        cache->lines[cache_index][via].dirty = 0;
-    }   
-    cache->lines[cache_index][via].id = cache_tag;
-    cache->lines[cache_index][via].valid = 1;
-
-    uint32_t block_addr = (addr / cache->block_size) * cache->block_size;
-    if (block_addr < OFFSET_RAM) {
-        printf("ERRO: acesso fora da RAM: addr=0x%08x\n", addr);
-    }
-    else{
-        uint32_t palavras = cache->block_size / 4;
-        uint32_t base_idx = (block_addr - OFFSET_RAM) >> 2;
-        for (uint32_t i = 0; i < palavras; i++)
+        if (is_store) 
         {
-            ((uint32_t *)cache->lines[cache_index][via].data)[i] = ((uint32_t *)mem)[base_idx + i];
+            uint32_t ram_index = addr - OFFSET_RAM;
+
+            if (ram_index < MAX_RAM - OFFSET_RAM) { 
+                if (bytes == 4)
+                    *(uint32_t *)&mem[ram_index] = data;
+                else if (bytes == 2)
+                    *(uint16_t *)&mem[ram_index] = (uint16_t)data;
+                else
+                    *(uint8_t *)&mem[ram_index] = (uint8_t)data;
+            }
+
+            // cache->lines[cache_index][via].dirty = 1;
+            cache->lines[cache_index][via].age = 0;
+            atualiza_lru(cache);
+            
+            return; 
         }
-    }
-
-    if(is_store)
-    {
-        uint32_t offset = addr % cache->block_size;
-
-        if (bytes == 4)
-            *(uint32_t *)(cache->lines[cache_index][via].data + offset) = data;
-        else if (bytes == 2)
-            *(uint16_t *)(cache->lines[cache_index][via].data + offset) = (uint16_t)data;
-        else if (bytes == 1)
-            *(uint8_t *)(cache->lines[cache_index][via].data + offset) = (uint8_t)data;
-        cache->lines[cache_index][via].dirty = 1;
+        
+        if (cache->lines[cache_index][via].dirty && cache->lines[cache_index][via].valid){
+            salvar_na_ram(mem, &cache->lines[cache_index][via], cache_index);
+            cache->lines[cache_index][via].dirty = 0;
+        }   
+        cache->lines[cache_index][via].id = cache_tag;
+        cache->lines[cache_index][via].valid = 1;
+        cache->lines[cache_index][via].age = 0;
+        
+        uint32_t block_addr = (addr / cache->block_size) * cache->block_size;
+        if (block_addr < OFFSET_RAM) {
+            printf("ERRO: acesso fora da RAM: addr=0x%08x\n", addr);
+        }
+        else{
+            uint32_t palavras = cache->block_size / 4;
+            uint32_t base_idx = (block_addr - OFFSET_RAM) >> 2;
+            for (uint32_t i = 0; i < palavras; i++)
+            {
+                ((uint32_t *)cache->lines[cache_index][via].data)[i] = ((uint32_t *)mem)[base_idx + i];
+            }
+        }
     }
     atualiza_lru(cache);
 };
@@ -1545,18 +1548,16 @@ int main(int argc, char *argv[])
                 print_instruction(buffer_type, "nind", col1_addr, col2_inst, pc, rs1, rs2, rd, 0, "ebreak", (char **)x_label);
                 const uint32_t previous = ((uint32_t *)(mem))[(pc - 4 - offset) >> 2];
                 const uint32_t next = ((uint32_t *)(mem))[(pc + 4 - offset) >> 2];
-                if (previous == 0x01f01013 && next == 0x40705013)
-                {
-                    cache_tag = (pc - 4) >> (bits_offset + bits_index);
-                    cache_index = ((pc - 4) >> bits_offset) & (NUM_SETS - 1);
-                    acessar_cache(&cache_i, mem, cache_index, cache_tag, pc - 4, "instruction", bts, dados, output);
+                // if (previous == 0x01f01013 && next == 0x40705013)
+                cache_tag = (pc - 4) >> (bits_offset + bits_index);
+                cache_index = ((pc - 4) >> bits_offset) & (NUM_SETS - 1);
+                acessar_cache(&cache_i, mem, cache_index, cache_tag, pc - 4, "instruction", bts, dados, output);
 
-                    cache_tag = (pc + 4) >> (bits_offset + bits_index);
-                    cache_index = ((pc + 4) >> bits_offset) & (NUM_SETS - 1);
-                    acessar_cache(&cache_i, mem, cache_index, cache_tag, pc + 4, "instruction", bts, dados, output);
-                    run = 0;
-                }
+                cache_tag = (pc + 4) >> (bits_offset + bits_index);
+                cache_index = ((pc + 4) >> bits_offset) & (NUM_SETS - 1);
+                acessar_cache(&cache_i, mem, cache_index, cache_tag, pc + 4, "instruction", bts, dados, output);
                 sprintf(col3_details, "");
+                run = 0;
             }
             // ECALL
             else if (imm == 0)
@@ -1857,10 +1858,6 @@ int main(int argc, char *argv[])
         }
         pc += 4;
     }
-    // fprintf(logi, "---------- CACHE DE DADOS ---------\n");
-    // imprime_tags(&cache_d);
-    // fprintf(logi, "---------- CACHE DE INSTRUCOES ---------\n");
-    // imprime_tags(&cache_i);
     free(mem);
     if (term_in_buffer)
         free(term_in_buffer);
