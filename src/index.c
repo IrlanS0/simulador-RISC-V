@@ -23,6 +23,7 @@
 #define BLOCK_SIZE 16
 #define ASSOCIATIVITY 2
 #define NUM_SETS 8
+#define MAX_AGE 255
 static FILE *logi;
 
 void init_log(void)
@@ -188,6 +189,7 @@ void atualiza_lru(CACHE *cache)
         {
             if (cache->lines[i][j].valid)
             {
+                if (cache->lines[i][j].age < MAX_AGE)
                     cache->lines[i][j].age++;
             }
         }
@@ -237,7 +239,7 @@ void salvar_na_ram(uint8_t *mem, CACHELINE *linha, uint32_t index)
 void acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_t cache_tag, uint32_t addr, char info_cache[15], uint8_t bytes, uint32_t data, FILE *output)
 {
     int hit = 0;
-    int id_hit, id_miss;
+    int id_hit, id_miss, no_count = 0;
     bool is_store = false;
 
     if (strcmp(info_cache, "instruction") == 0)
@@ -262,6 +264,18 @@ void acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_t ca
     {
         if (cache->lines[cache_index][i].valid && cache->lines[cache_index][i].id == cache_tag)
         {
+            if (is_store) {
+                uint32_t offset = addr & (cache->block_size - 1); 
+                
+                if (bytes == 4)
+                    ((uint32_t *)(cache->lines[cache_index][i].data))[offset / 4] = data;
+                else if (bytes == 2)
+                    ((uint16_t *)(cache->lines[cache_index][i].data))[offset / 2] = (uint16_t)data;
+                else
+                    ((uint8_t *)(cache->lines[cache_index][i].data))[offset] = (uint8_t)data;
+
+                cache->lines[cache_index][i].dirty = 1; 
+            }
             cache->lines[cache_index][i].age = 0;
             evento_de_cache(cache, id_hit, output, addr, cache_index, i);
             hit = 1;
@@ -280,25 +294,26 @@ void acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_t ca
                 break;
             }
         }
+
         if (via == 0xFFFFFFFF)
         {
             via = encontrar_lru(cache, cache_index);
         }
+        
         evento_de_cache(cache, id_miss, output, addr, cache_index, via); 
         if (is_store) 
         {
             uint32_t ram_index = addr - OFFSET_RAM;
-
+            
             if (ram_index < MAX_RAM - OFFSET_RAM) { 
                 if (bytes == 4)
-                    *(uint32_t *)&mem[ram_index] = data;
+                *(uint32_t *)&mem[ram_index] = data;
                 else if (bytes == 2)
-                    *(uint16_t *)&mem[ram_index] = (uint16_t)data;
+                *(uint16_t *)&mem[ram_index] = (uint16_t)data;
                 else
-                    *(uint8_t *)&mem[ram_index] = (uint8_t)data;
+                *(uint8_t *)&mem[ram_index] = (uint8_t)data;
             }
-
-            // cache->lines[cache_index][via].dirty = 1;
+            
             cache->lines[cache_index][via].age = 0;
             atualiza_lru(cache);
             
@@ -306,8 +321,8 @@ void acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_t ca
         }
         
         if (cache->lines[cache_index][via].dirty && cache->lines[cache_index][via].valid){
-            salvar_na_ram(mem, &cache->lines[cache_index][via], cache_index);
-            cache->lines[cache_index][via].dirty = 0;
+        salvar_na_ram(mem, &cache->lines[cache_index][via], cache_index);
+        cache->lines[cache_index][via].dirty = 0;
         }   
         cache->lines[cache_index][via].id = cache_tag;
         cache->lines[cache_index][via].valid = 1;
@@ -762,6 +777,7 @@ int store(CACHE *cache, PLIC_REG *plic, UART_REG *uart, uint8_t *mem, uint32_t c
     if (addr >= OFFSET_RAM && (addr + bytes) < MAX_RAM)
     {
         acessar_cache(cache, mem, cache_index, cache_tag, addr, "write", bytes, data, output);
+        // atualiza_lru(cache);
         return 0;
     }
 
@@ -1000,7 +1016,7 @@ int main(int argc, char *argv[])
         uint32_t dados = 0;
         uint32_t cache_index = (pc >> bits_offset) & (NUM_SETS - 1);
         uint32_t cache_tag = pc >> (bits_offset + bits_index);
-        acessar_cache(&cache_i, mem, cache_index, cache_tag, pc, "instruction", bts, dados, output);
+        
         // Incrementa o timer
         mtime++;
         if (mtime >= mtimecmp)
@@ -1093,8 +1109,9 @@ int main(int argc, char *argv[])
         }
         
         // Fetch
+        acessar_cache(&cache_i, mem, cache_index, cache_tag, pc, "instruction", bts, dados, output);
+        // atualiza_lru(&cache_i);
         const uint32_t instruction = ((uint32_t *)(mem))[(pc - OFFSET_RAM) >> 2];
-        // fprintf(logi, "INSTRUCTION=0x%08x--pc:0x%08x\n", instruction, pc);
         const uint8_t opcode = instruction & 0b1111111;
         const uint8_t funct7 = instruction >> 25;
         const uint8_t funct3 = (instruction & (0b111 << 12)) >> 12;
@@ -1444,6 +1461,7 @@ int main(int argc, char *argv[])
                 cache_index = (address >> bits_offset) & (NUM_SETS - 1);
                 cache_tag = address >> (bits_offset + bits_index);
                 acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "read", bts, dados, output);
+                // atualiza_lru(&cache_d);
             }
 
             if (funct3 == 0b000)
@@ -1546,18 +1564,28 @@ int main(int argc, char *argv[])
             if (funct3 == 0b000 && imm == 1)
             {
                 print_instruction(buffer_type, "nind", col1_addr, col2_inst, pc, rs1, rs2, rd, 0, "ebreak", (char **)x_label);
-                const uint32_t previous = ((uint32_t *)(mem))[(pc - 4 - offset) >> 2];
-                const uint32_t next = ((uint32_t *)(mem))[(pc + 4 - offset) >> 2];
-                // if (previous == 0x01f01013 && next == 0x40705013)
-                cache_tag = (pc - 4) >> (bits_offset + bits_index);
-                cache_index = ((pc - 4) >> bits_offset) & (NUM_SETS - 1);
-                acessar_cache(&cache_i, mem, cache_index, cache_tag, pc - 4, "instruction", bts, dados, output);
+                
+                const uint32_t previous = ((uint32_t *)(mem))[(pc - 4 - OFFSET_RAM) >> 2];
+                const uint32_t next = ((uint32_t *)(mem))[(pc + 4 - OFFSET_RAM) >> 2];
 
-                cache_tag = (pc + 4) >> (bits_offset + bits_index);
-                cache_index = ((pc + 4) >> bits_offset) & (NUM_SETS - 1);
-                acessar_cache(&cache_i, mem, cache_index, cache_tag, pc + 4, "instruction", bts, dados, output);
+                if (previous == 0x01f01013 && next == 0x40705013) {
+                    cache_tag = (pc - 4) >> (bits_offset + bits_index);
+                    cache_index = ((pc - 4) >> bits_offset) & (NUM_SETS - 1);
+                    acessar_cache(&cache_i, mem, cache_index, cache_tag, pc - 4, "instruction", bts, dados, output);
+                    // atualiza_lru(&cache_i);
+                    
+                    cache_tag = (pc + 4) >> (bits_offset + bits_index);
+                    cache_index = ((pc + 4) >> bits_offset) & (NUM_SETS - 1);
+                    acessar_cache(&cache_i, mem, cache_index, cache_tag, pc + 4, "instruction", bts, dados, output);
+                    // atualiza_lru(&cache_i);
+                    run = 0; 
+                }
+                else {
+                    csr.mepc = pc;      // Salva PC atual
+                    csr.mcause = 3;     // Causa = Breakpoint
+                    pc = csr.mtvec;     // Pula para o Handler 
+                }
                 sprintf(col3_details, "");
-                run = 0;
             }
             // ECALL
             else if (imm == 0)
@@ -1677,8 +1705,12 @@ int main(int argc, char *argv[])
                             new_data);
                 }
             }
-
-            fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
+            if (funct3 == 0b000 && imm == 1){
+                fprintf(output, "%-18s%-20s%s", col1_addr, col2_inst, col3_details);
+            }
+            else {
+                fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
+            }
             if (funct3 != 0 && rd != 0)
                 x[rd] = csr_antigo;
 
@@ -1693,8 +1725,6 @@ int main(int argc, char *argv[])
             uint32_t data_change = x[rs2];
             cache_index = (address >> bits_offset) & (NUM_SETS - 1);
             cache_tag = address >> (bits_offset + bits_index);
-            // fprintf(logi, "Escrevendo na cache D - endereco: 0x%08x, index: %u, tag: 0x%08x\n", address, cache_index, cache_tag);
-            // acessar_cache(&cache_d, mem, cache_index, cache_tag, address, output, "write");
 
             if (funct3 == 0b000)
             {
