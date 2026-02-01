@@ -47,12 +47,8 @@ typedef struct
     uint32_t associativity;
     uint32_t num_sets;
 
-    uint32_t total_accesses;
-    uint32_t hits;
-    uint32_t misses;
-    uint32_t read_hits;
-    uint32_t write_hits;
-    uint32_t writebacks;
+    float total_accesses;
+    float hits;
 
     CACHELINE lines[NUM_SETS][ASSOCIATIVITY];
 } CACHE;
@@ -90,6 +86,9 @@ typedef struct
 
 void init_cache(CACHE *cache)
 {
+    cache->total_accesses = 0;
+    cache->hits = 0;
+
     cache->size = CACHE_SIZE;
     cache->block_size = BLOCK_SIZE;
     cache->associativity = ASSOCIATIVITY;
@@ -238,6 +237,7 @@ void salvar_na_ram(uint8_t *mem, CACHELINE *linha, uint32_t index)
 
 void acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_t cache_tag, uint32_t addr, char info_cache[15], uint8_t bytes, uint32_t data, FILE *output)
 {
+    cache->total_accesses++;
     int hit = 0;
     int id_hit, id_miss, no_count = 0;
     bool is_store = false;
@@ -264,6 +264,7 @@ void acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_t ca
     {
         if (cache->lines[cache_index][i].valid && cache->lines[cache_index][i].id == cache_tag)
         {
+            cache->hits++;
             if (is_store) {
                 uint32_t offset = addr & (cache->block_size - 1); 
                 
@@ -321,8 +322,8 @@ void acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_t ca
         }
         
         if (cache->lines[cache_index][via].dirty && cache->lines[cache_index][via].valid){
-        salvar_na_ram(mem, &cache->lines[cache_index][via], cache_index);
-        cache->lines[cache_index][via].dirty = 0;
+            salvar_na_ram(mem, &cache->lines[cache_index][via], cache_index);
+            cache->lines[cache_index][via].dirty = 0;
         }   
         cache->lines[cache_index][via].id = cache_tag;
         cache->lines[cache_index][via].valid = 1;
@@ -1888,6 +1889,16 @@ int main(int argc, char *argv[])
         }
         pc += 4;
     }
+    sprintf(col1_addr, "#cache_mem:dstats");
+    sprintf(col2_inst, "");
+    sprintf(col3_details, "hit=%.4f", cache_d.hits / cache_d.total_accesses);
+    fprintf(output, "\n%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
+    
+    sprintf(col1_addr, "#cache_mem:istats");
+    sprintf(col2_inst, "");
+    sprintf(col3_details, "hit=%.4f", cache_i.hits / cache_i.total_accesses);
+    fprintf(output, "%-18s%-20s%s", col1_addr, col2_inst, col3_details);
+    
     free(mem);
     if (term_in_buffer)
         free(term_in_buffer);
