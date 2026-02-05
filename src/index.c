@@ -248,16 +248,17 @@ void salvar_na_ram(uint8_t *mem, CACHELINE *linha, uint32_t index)
     }
 }
 
-uint32_t acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_t cache_tag, uint32_t addr, char info_cache[15], uint8_t bytes, uint32_t data, FILE *output)
+uint32_t acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_t cache_tag, uint32_t addr, char info_cache[15], uint8_t bytes, uint32_t data, FILE *output, uint32_t info)
 {
     cache->total_accesses++;
     uint32_t dado_lido = 0;
     int hit = 0;
     int id_hit, id_miss, no_count = 0;
-    bool is_store = false;
+    bool is_store = false, is_instruction = false;
 
     if (strcmp(info_cache, "instruction") == 0)
     {
+        is_instruction = true;
         id_hit = 4;
         id_miss = 1;
     }
@@ -268,8 +269,8 @@ uint32_t acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_
     }
     else if (strcmp(info_cache, "write") == 0)
     {
-        if (data == 123456789){
-            data = 0;
+        if (info == 123456789){
+            info = 0;
             id_hit = 7;
             id_miss = 8;
         }
@@ -283,40 +284,53 @@ uint32_t acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_
     uint32_t via = 0xFFFFFFFF;
     for (uint32_t i = 0; i < cache->associativity; i++)
     {
-        uint8_t *bloco_bytes = (uint8_t *)cache->lines[cache_index][i].data;
         if (cache->lines[cache_index][i].valid && cache->lines[cache_index][i].id == cache_tag)
         {
             cache->hits++;
-            uint32_t offset = addr & (cache->block_size - 1); 
-            if (is_store) {
+            uint8_t *bloco_bytes = (uint8_t *)cache->lines[cache_index][i].data;
+            uint32_t base_line_addr = addr & (cache->block_size - 1); 
+            
+            for (int j = 0; j < (int)bytes; j++) {
+                uint32_t current_addr = addr + j;
+                uint32_t current_offset = current_addr & (cache->block_size - 1);
                 
-                if (bytes == 4)
-                    ((uint32_t *)(cache->lines[cache_index][i].data))[offset / 4] = data;
-                else if (bytes == 2)
-                    ((uint16_t *)(cache->lines[cache_index][i].data))[offset / 2] = (uint16_t)data;
-                else
-                    ((uint8_t *)(cache->lines[cache_index][i].data))[offset] = (uint8_t)data;
+                uint8_t byte_temp; 
 
-                cache->lines[cache_index][i].dirty = 1; 
-            }
-            else {
-                if (bytes == 4) 
-                {
-                    dado_lido = (uint32_t)bloco_bytes[offset] |
-                                (uint32_t)bloco_bytes[offset + 1] << 8 |
-                                (uint32_t)bloco_bytes[offset + 2] << 16 |
-                                (uint32_t)bloco_bytes[offset + 3] << 24;
+                if ((current_addr & ~(cache->block_size - 1)) == base_line_addr) {
+                    if (is_store) {
+                        // STORE: Pega os 8 bits menos significativos do dado deslocado
+                        bloco_bytes[current_offset] = (uint8_t)((data >> (8 * j)) & 0xFF);
+                        cache->lines[cache_index][i].dirty = 1;
+                    } else {
+                        byte_temp = bloco_bytes[current_offset];
+                    }
+                } else {
+                    // RAM
+                    uint32_t ram_idx = current_addr - OFFSET_RAM;
+                    if (current_addr >= OFFSET_RAM && current_addr < MAX_RAM) {
+                        if (is_store) {
+                            mem[ram_idx] = (uint8_t)((data >> (8 * j)) & 0xFF);
+                        } else{
+                            byte_temp = mem[ram_idx];
+                        }
+                    } else {
+                        byte_temp = 0; // Leitura fora da RAM retorna 0
+                    }
                 }
-                else if (bytes == 2)
-                {
-                    dado_lido = (uint32_t)bloco_bytes[offset] |
-                                (uint32_t)bloco_bytes[offset + 1] << 8;
+
+                // 2. CONSTRUÇÃO DO DADO (READ)
+                if (!is_store) {
+                    // if (is_instruction) {
+                    //     dado_lido = ((uint32_t *)(mem))[(addr - OFFSET_RAM) >> 2];
+                    // }
+                    // else {
+                        dado_lido |= ((uint32_t)byte_temp & 0xFF) << (8 * j);
+                    // }
                 }
-                else
-                    dado_lido = (uint32_t)bloco_bytes[offset];
             }
+
             cache->lines[cache_index][i].age = 0;
-            evento_de_cache(cache, id_hit, output, addr, cache_index, i);
+            // evento_de_cache(cache, id_hit, output, addr, cache_index, i);
             hit = 1;
             via = i;
             break;
@@ -339,20 +353,16 @@ uint32_t acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_
             via = encontrar_lru(cache, cache_index);
         }
         
-        evento_de_cache(cache, id_miss, output, addr, cache_index, via); 
+        // evento_de_cache(cache, id_miss, output, addr, cache_index, via); 
         if (is_store) 
         {
-            uint32_t ram_index = addr - OFFSET_RAM;
-            
-            if (ram_index < MAX_RAM - OFFSET_RAM) { 
-                if (bytes == 4)
-                *(uint32_t *)&mem[ram_index] = data;
-                else if (bytes == 2)
-                *(uint16_t *)&mem[ram_index] = (uint16_t)data;
-                else
-                *(uint8_t *)&mem[ram_index] = (uint8_t)data;
+            for(int j = 0; j < (int)bytes; j++) {
+                uint32_t current_addr = addr + j;
+                if (current_addr >= OFFSET_RAM && current_addr < MAX_RAM) {
+                    // STORE MISS: Máscara & 0xFF garante escrita limpa
+                    mem[current_addr - OFFSET_RAM] = (uint8_t)((data >> (8 * j)) & 0xFF);
+                }
             }
-            
             cache->lines[cache_index][via].age = 0;
             atualiza_lru(cache);
             
@@ -368,8 +378,9 @@ uint32_t acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_
         cache->lines[cache_index][via].age = 0;
         
         uint32_t block_addr = (addr / cache->block_size) * cache->block_size;
-        if (block_addr < OFFSET_RAM) {
+        if (block_addr < OFFSET_RAM || block_addr + cache->block_size > MAX_RAM) {
             printf("ERRO: acesso fora da RAM: addr=0x%08x\n", addr);
+            return -1;
         }
         else{
             uint32_t palavras = cache->block_size / 4;
@@ -382,21 +393,22 @@ uint32_t acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_
 
         if (!is_store) {
             uint8_t *bloco_bytes = (uint8_t *)cache->lines[cache_index][via].data;
-            uint32_t offset = addr & (cache->block_size - 1);
-            if (bytes == 4) 
-                {
-                dado_lido = (uint32_t)bloco_bytes[offset] |
-                            (uint32_t)bloco_bytes[offset + 1] << 8 |
-                            (uint32_t)bloco_bytes[offset + 2] << 16 |
-                            (uint32_t)bloco_bytes[offset + 3] << 24;
+            uint32_t base_line_addr = addr & ~(cache->block_size - 1);
+        
+            for (int j = 0; j < (int)bytes; j++) {
+                uint32_t current_addr = addr + j;
+                uint8_t byte_temp;
+
+                if ((current_addr & ~(cache->block_size - 1)) == base_line_addr) {
+                    byte_temp = bloco_bytes[current_addr & (cache->block_size - 1)];
+                } else if (current_addr >= OFFSET_RAM && current_addr < MAX_RAM) {
+                    byte_temp = mem[current_addr - OFFSET_RAM];
+                } else {
+                    byte_temp = 0;
                 }
-            else if (bytes == 2)
-                {
-                dado_lido = (uint32_t)bloco_bytes[offset] |
-                                (uint32_t)bloco_bytes[offset + 1] << 8;
-                }
-            else
-                dado_lido = (uint32_t)bloco_bytes[offset];
+
+                dado_lido |= ((uint32_t)byte_temp & 0xFF) << (8 * j);
+            }
         }
     }
     atualiza_lru(cache);
@@ -554,7 +566,10 @@ uint32_t uart_r(uint32_t add, UART_REG *uart)
     {
         uint32_t data = uart->rhr;
         uart->lsr &= ~0x01;
-        return data;
+        if (data != 0x05)
+            return data;
+        else 
+            return 0;
     }
     case 0b001:
         return uart->ier;
@@ -836,8 +851,7 @@ int store(CACHE *cache, PLIC_REG *plic, UART_REG *uart, uint8_t *mem, uint32_t c
     // 5. RAM
     if (addr >= OFFSET_RAM && (addr + bytes) < MAX_RAM)
     {
-        uint32_t dado_lido = acessar_cache(cache, mem, cache_index, cache_tag, addr, "write", bytes, data, output);
-        // atualiza_lru(cache);
+        uint32_t dado_lido = acessar_cache(cache, mem, cache_index, cache_tag, addr, "write", bytes, data, output, 0);
         return dado_lido;
     }
 
@@ -1071,6 +1085,7 @@ int main(int argc, char *argv[])
     }
     while (run)
     {
+        uint32_t guarda_pc;
         // Verifica se instrucao esta na cache
         uint8_t bts = 0;
         uint32_t dados = 0;
@@ -1157,9 +1172,10 @@ int main(int argc, char *argv[])
             continue;
         }
         
-        uint32_t inutil = acessar_cache(&cache_i, mem, cache_index, cache_tag, pc, "instruction", bts, dados, output);
+        uint32_t instructio = acessar_cache(&cache_i, mem, cache_index, cache_tag, pc, "instruction", bts, dados, output, 0);
+
         // Verifica se há exceção de instrução inválida
-        if (pc >= MAX_RAM || pc < OFFSET_RAM)
+        if (pc >= MAX_RAM || pc < OFFSET_RAM || instructio == -1)
         {
             exception_handler(&csr, &pc, 1, 0);
             uint32_t mcause = csr_r(0x342, &csr);
@@ -1170,18 +1186,18 @@ int main(int argc, char *argv[])
         }
         
         // Fetch
-        // atualiza_lru(&cache_i);
         const uint32_t instruction = ((uint32_t *)(mem))[(pc - OFFSET_RAM) >> 2];
+        guarda_pc = pc;
         const uint8_t opcode = instruction & 0b1111111;
         const uint8_t funct7 = instruction >> 25;
         const uint8_t funct3 = (instruction & (0b111 << 12)) >> 12;
         // Imediato de 12 e 7 bits, tipos b e s, respectivamente
         const uint16_t imm = (instruction >> 20) & 0b111111111111;
         const uint8_t uimm = (instruction & (0b11111 << 20)) >> 20;
-        const uint16_t imm_b = ((instruction >> 31) & 0b1) << 12 |
-                               ((instruction >> 7) & 0b1) << 11 |
-                               ((instruction >> 25) & 0b111111) << 5 |
-                               ((instruction >> 8) & 0b1111) << 1;
+        const uint16_t imm_b =  ((instruction >> 31) & 0b1) << 12 |
+                                ((instruction >> 7) & 0b1) << 11 |
+                                ((instruction >> 25) & 0b111111) << 5 |
+                                ((instruction >> 8) & 0b1111) << 1;
         const uint16_t imm_s =
             ((instruction >> 25) & 0b1111111) << 5 | ((instruction >> 7) & 0b11111);
         // Registradores de uso geral e uso especifico
@@ -1521,7 +1537,7 @@ int main(int argc, char *argv[])
             cache_index = (address >> bits_offset) & (NUM_SETS - 1);
             cache_tag = address >> (bits_offset + bits_index);
             if (RAM){
-                dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "read", bytes, dados, output);
+                dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "read", bytes, dados, output, 0);
             }
 
             if (funct3 == 0b000)
@@ -1529,13 +1545,16 @@ int main(int argc, char *argv[])
                 int8_t data = 0;
                 if (!is_valid)
                 {
-                    dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "read", bytes, dados, output);
+                    dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "read", bytes, dados, output, 0);
                     print(0, pc, address, 5, "load_fault", output);
                     exception_handler(&csr, &pc, 5, address);
                     continue;
                 }
                 if (!RAM){
                     data = load(&plic, &uart, mem, address, 1, mtime, mtimecmp, msip);
+                    if (data == 0x05) {
+                        printf("data lido = 0x%02x\n", (uint8_t)data);
+                    }
                 }
                     
                 print_instruction(buffer_type, "load", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "lb", (char **)x_label);
@@ -1551,7 +1570,7 @@ int main(int argc, char *argv[])
                 uint8_t data = 0;
                 if (!is_valid)
                 {
-                    dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "read", bytes, dados, output);
+                    dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "read", bytes, dados, output, 0);
                     print(0, pc, address, 5, "load_fault", output);
                     exception_handler(&csr, &pc, 5, address);
                     continue;
@@ -1559,6 +1578,9 @@ int main(int argc, char *argv[])
 
                 if (!RAM) {
                     data = load(&plic, &uart, mem, address, 1, mtime, mtimecmp, msip);
+                    if (data == 0x05) {
+                        printf("data lido = 0x%02x\n", (uint8_t)data);
+                    }
                 }
                     
                 print_instruction(buffer_type, "load", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "lbu", (char **)x_label);
@@ -1574,7 +1596,7 @@ int main(int argc, char *argv[])
                 int16_t data = 0;
                 if (!is_valid)
                 {
-                    dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "read", bytes, dados, output);
+                    dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "read", bytes, dados, output, 0);
                     print(0, pc, address, 5, "load_fault", output);
                     exception_handler(&csr, &pc, 5, address);
                     continue;
@@ -1582,6 +1604,9 @@ int main(int argc, char *argv[])
 
                 if (!RAM){
                     data = load(&plic, &uart, mem, address, 2, mtime, mtimecmp, msip);
+                    if (data == 0x05) {
+                        printf("data lido = 0x%02x\n", (uint8_t)data);
+                    }
                 }
 
                 print_instruction(buffer_type, "load", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "lh", (char **)x_label);
@@ -1596,7 +1621,7 @@ int main(int argc, char *argv[])
                 uint16_t data = 0;
                 if (!is_valid)
                 {
-                    dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "read", bytes, dados, output);
+                    dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "read", bytes, dados, output, 0);
                     print(0, pc, address, 5, "load_fault", output);
                     exception_handler(&csr, &pc, 5, address);
                     continue;
@@ -1605,6 +1630,9 @@ int main(int argc, char *argv[])
                 if (!RAM)
                 {
                     data = load(&plic, &uart, mem, address, 2, mtime, mtimecmp, msip);
+                    if (data == 0x05) {
+                        printf("data lido = 0x%02x\n", (uint8_t)data);
+                    }
                 }
 
                 print_instruction(buffer_type, "load", col1_addr, col2_inst, pc, rs1, rs2, rd, imm, "lhu", (char **)x_label);
@@ -1619,13 +1647,16 @@ int main(int argc, char *argv[])
                 uint32_t data = 0;
                 if (!is_valid)
                 {
-                    dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "read", bytes, dados, output);
+                    dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "read", bytes, dados, output, 0);
                     print(0, pc, address, 5, "load_fault", output);
                     exception_handler(&csr, &pc, 5, address);
                     continue;
                 }
                 if (!RAM) {
                     data = load(&plic, &uart, mem, address, 4, mtime, mtimecmp, msip);
+                    if (data == 0x05) {
+                        printf("data lido = 0x%02x\n", (uint8_t)data);
+                    }
                 }
                 print_instruction(buffer_type, "load", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "lw", (char **)x_label);
                 sprintf(col3_details, "%s=mem[0x%08x]=0x%08x", x_label[rd], address, data ? data : dado_lido);
@@ -1662,12 +1693,12 @@ int main(int argc, char *argv[])
                 if (previous == 0x01f01013 && next == 0x40705013) {
                     cache_tag = (pc - 4) >> (bits_offset + bits_index);
                     cache_index = ((pc - 4) >> bits_offset) & (NUM_SETS - 1);
-                    acessar_cache(&cache_i, mem, cache_index, cache_tag, pc - 4, "instruction", bts, dados, output);
+                    acessar_cache(&cache_i, mem, cache_index, cache_tag, pc - 4, "instruction", bts, dados, output, 0);
                     // atualiza_lru(&cache_i);
                     
                     cache_tag = (pc + 4) >> (bits_offset + bits_index);
                     cache_index = ((pc + 4) >> bits_offset) & (NUM_SETS - 1);
-                    acessar_cache(&cache_i, mem, cache_index, cache_tag, pc + 4, "instruction", bts, dados, output);
+                    acessar_cache(&cache_i, mem, cache_index, cache_tag, pc + 4, "instruction", bts, dados, output, 0);
                     // atualiza_lru(&cache_i);
                     run = 0; 
                 }
@@ -1823,7 +1854,7 @@ int main(int argc, char *argv[])
                 dados = store(&cache_d, &plic, &uart, mem, cache_index, cache_tag, 1, address, data_change, &mtimecmp, &msip, term_out, output);
                 if (dados != 0)
                 {
-                    dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "write", 1, dados, output);
+                    dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "write", 1, 0, output, dados);
                     print(0, pc, address, 7, "store_fault", output);
                     exception_handler(&csr, &pc, 7, address);
                     continue;
@@ -1837,7 +1868,7 @@ int main(int argc, char *argv[])
                 dados = store(&cache_d, &plic, &uart, mem, cache_index, cache_tag, 2, address, data_change, &mtimecmp, &msip, term_out, output);
                 if (dados != 0)
                 {
-                    dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "write", 2, dados, output);
+                    dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "write", 2, 0, output, dados);
                     print(0, pc, address, 7, "store_fault", output);
                     exception_handler(&csr, &pc, 7, address);
                     continue;
@@ -1851,7 +1882,7 @@ int main(int argc, char *argv[])
                 dados = store(&cache_d, &plic, &uart, mem, cache_index, cache_tag, 4, address, data_change, &mtimecmp, &msip, term_out, output);
                 if (dados != 0)
                 {
-                    dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "write", 4, dados, output);
+                    dado_lido = acessar_cache(&cache_d, mem, cache_index, cache_tag, address, "write", 4, 0, output, dados);
                     print(0, pc, address, 7, "store_fault", output);
                     exception_handler(&csr, &pc, 7, address);
                     continue;
