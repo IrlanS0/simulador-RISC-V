@@ -253,12 +253,11 @@ uint32_t acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_
     cache->total_accesses++;
     uint32_t dado_lido = 0;
     int hit = 0;
-    int id_hit, id_miss, no_count = 0;
-    bool is_store = false, is_instruction = false;
+    int id_hit, id_miss;
+    bool is_store = false;
 
     if (strcmp(info_cache, "instruction") == 0)
     {
-        is_instruction = true;
         id_hit = 4;
         id_miss = 1;
     }
@@ -320,17 +319,12 @@ uint32_t acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_
 
                 // 2. CONSTRUÇÃO DO DADO (READ)
                 if (!is_store) {
-                    // if (is_instruction) {
-                    //     dado_lido = ((uint32_t *)(mem))[(addr - OFFSET_RAM) >> 2];
-                    // }
-                    // else {
                         dado_lido |= ((uint32_t)byte_temp & 0xFF) << (8 * j);
-                    // }
                 }
             }
 
             cache->lines[cache_index][i].age = 0;
-            // evento_de_cache(cache, id_hit, output, addr, cache_index, i);
+            evento_de_cache(cache, id_hit, output, addr, cache_index, i);
             hit = 1;
             via = i;
             break;
@@ -353,13 +347,12 @@ uint32_t acessar_cache(CACHE *cache, uint8_t *mem, uint32_t cache_index, uint32_
             via = encontrar_lru(cache, cache_index);
         }
         
-        // evento_de_cache(cache, id_miss, output, addr, cache_index, via); 
+        evento_de_cache(cache, id_miss, output, addr, cache_index, via); 
         if (is_store) 
         {
             for(int j = 0; j < (int)bytes; j++) {
                 uint32_t current_addr = addr + j;
                 if (current_addr >= OFFSET_RAM && current_addr < MAX_RAM) {
-                    // STORE MISS: Máscara & 0xFF garante escrita limpa
                     mem[current_addr - OFFSET_RAM] = (uint8_t)((data >> (8 * j)) & 0xFF);
                 }
             }
@@ -566,10 +559,7 @@ uint32_t uart_r(uint32_t add, UART_REG *uart)
     {
         uint32_t data = uart->rhr;
         uart->lsr &= ~0x01;
-        if (data != 0x05)
-            return data;
-        else 
-            return 0;
+        return data;
     }
     case 0b001:
         return uart->ier;
@@ -750,7 +740,7 @@ uint32_t read_word(uint32_t addr, uint8_t *mem, uint8_t bytes, uint32_t index)
     }
 }
 
-uint32_t load(PLIC_REG *plic, UART_REG *uart, uint8_t *mem, uint32_t addr, uint8_t bytes, uint64_t mtime, uint64_t mtimecmp,
+uint32_t load(PLIC_REG *plic, UART_REG *uart, uint32_t addr, uint64_t mtime, uint64_t mtimecmp,
               uint32_t msip)
 {
     uint32_t index = 0;
@@ -800,9 +790,6 @@ uint32_t load(PLIC_REG *plic, UART_REG *uart, uint8_t *mem, uint32_t addr, uint8
     // 5. RAM
     else if (addr >= OFFSET_RAM && addr <= MAX_RAM)
     {
-        // index = addr - OFFSET_RAM;
-        // uint32_t ram_info = read_word(addr, mem, bytes, index);
-        // return ram_info;
         return 0;
     }
 
@@ -1085,7 +1072,6 @@ int main(int argc, char *argv[])
     }
     while (run)
     {
-        uint32_t guarda_pc;
         // Verifica se instrucao esta na cache
         uint8_t bts = 0;
         uint32_t dados = 0;
@@ -1175,7 +1161,7 @@ int main(int argc, char *argv[])
         uint32_t instructio = acessar_cache(&cache_i, mem, cache_index, cache_tag, pc, "instruction", bts, dados, output, 0);
 
         // Verifica se há exceção de instrução inválida
-        if (pc >= MAX_RAM || pc < OFFSET_RAM || instructio == -1)
+        if (pc >= MAX_RAM || pc < OFFSET_RAM || instructio == 0xFFFFFFFF)
         {
             exception_handler(&csr, &pc, 1, 0);
             uint32_t mcause = csr_r(0x342, &csr);
@@ -1187,7 +1173,6 @@ int main(int argc, char *argv[])
         
         // Fetch
         const uint32_t instruction = ((uint32_t *)(mem))[(pc - OFFSET_RAM) >> 2];
-        guarda_pc = pc;
         const uint8_t opcode = instruction & 0b1111111;
         const uint8_t funct7 = instruction >> 25;
         const uint8_t funct3 = (instruction & (0b111 << 12)) >> 12;
@@ -1450,7 +1435,7 @@ int main(int argc, char *argv[])
             }
             else if (funct3 == 0b011)
             {
-                const uint32_t data = (x[rs1] < simm) ? 1 : 0;
+                const uint32_t data = (x[rs1] < (uint32_t)simm) ? 1 : 0;
                 print_instruction(buffer_type, "", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "sltiu", (char **)x_label);
                 sprintf(col3_details, "%s=(0x%08x<0x%08x)=%u", x_label[rd], rs1_antigo,
                         simm, data);
@@ -1551,12 +1536,9 @@ int main(int argc, char *argv[])
                     continue;
                 }
                 if (!RAM){
-                    data = load(&plic, &uart, mem, address, 1, mtime, mtimecmp, msip);
-                    if (data == 0x05) {
-                        printf("data lido = 0x%02x\n", (uint8_t)data);
-                    }
+                    data = load(&plic, &uart, address, mtime, mtimecmp, msip);
                 }
-                    
+
                 print_instruction(buffer_type, "load", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "lb", (char **)x_label);
                 sprintf(col3_details, "%s=mem[0x%08x]=0x%08x", x_label[rd], address, !data ? (int8_t)dado_lido : (int8_t)data);
                 if (rd != 0)
@@ -1577,12 +1559,9 @@ int main(int argc, char *argv[])
                 }
 
                 if (!RAM) {
-                    data = load(&plic, &uart, mem, address, 1, mtime, mtimecmp, msip);
-                    if (data == 0x05) {
-                        printf("data lido = 0x%02x\n", (uint8_t)data);
-                    }
+                    data = load(&plic, &uart, address, mtime, mtimecmp, msip);
                 }
-                    
+
                 print_instruction(buffer_type, "load", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "lbu", (char **)x_label);
                 sprintf(col3_details, "%s=mem[0x%08x]=0x%08x", x_label[rd], address, (uint8_t)data ? (uint8_t)data : (uint8_t)dado_lido);
                 if (rd != 0)
@@ -1603,10 +1582,7 @@ int main(int argc, char *argv[])
                 }
 
                 if (!RAM){
-                    data = load(&plic, &uart, mem, address, 2, mtime, mtimecmp, msip);
-                    if (data == 0x05) {
-                        printf("data lido = 0x%02x\n", (uint8_t)data);
-                    }
+                    data = load(&plic, &uart, address, mtime, mtimecmp, msip);
                 }
 
                 print_instruction(buffer_type, "load", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "lh", (char **)x_label);
@@ -1629,10 +1605,7 @@ int main(int argc, char *argv[])
 
                 if (!RAM)
                 {
-                    data = load(&plic, &uart, mem, address, 2, mtime, mtimecmp, msip);
-                    if (data == 0x05) {
-                        printf("data lido = 0x%02x\n", (uint8_t)data);
-                    }
+                    data = load(&plic, &uart, address, mtime, mtimecmp, msip);
                 }
 
                 print_instruction(buffer_type, "load", col1_addr, col2_inst, pc, rs1, rs2, rd, imm, "lhu", (char **)x_label);
@@ -1652,12 +1625,11 @@ int main(int argc, char *argv[])
                     exception_handler(&csr, &pc, 5, address);
                     continue;
                 }
+
                 if (!RAM) {
-                    data = load(&plic, &uart, mem, address, 4, mtime, mtimecmp, msip);
-                    if (data == 0x05) {
-                        printf("data lido = 0x%02x\n", (uint8_t)data);
-                    }
+                    data = load(&plic, &uart, address, mtime, mtimecmp, msip);
                 }
+
                 print_instruction(buffer_type, "load", col1_addr, col2_inst, pc, rs1, rs2, rd, simm, "lw", (char **)x_label);
                 sprintf(col3_details, "%s=mem[0x%08x]=0x%08x", x_label[rd], address, data ? data : dado_lido);
                 if (rd != 0){
