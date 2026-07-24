@@ -1,69 +1,59 @@
-# --- Configuração Portátil ---
+# --- Configuração de Compilação ---
 CC = gcc
 CFLAGS = -Wall -g -std=c99
+EXECUTABLE = index
+OUTPUT_DIR = out
 
-# --- Detecção de Sistema (A Mágica) ---
-EXECUTABLE = main
-# Assume comandos Unix por padrão
-RM = rm -f
-RM_DIR = rm -rf
-MKDIR_CMD = @mkdir -p $(OUTPUT_DIR)
-EXEC_PREFIX = ./
-
-# Se o 'make' detectar que está no Windows...
+# --- Detecção de Sistema Operacional ---
 ifeq ($(OS),Windows_NT)
-	EXECUTABLE := $(EXECUTABLE).exe
-	RM = del /f /q
-	RM_DIR = rmdir /s /q
-	MKDIR_CMD = @mkdir $(OUTPUT_DIR) 2>NUL || exit 0
-	EXEC_PREFIX = .\
+    RM = del /f /q
+    RM_DIR = rmdir /s /q
+    EXEC_PREFIX = 
+    FIX_PATH = $(subst /,\,$1)
 else
-	EXEC_PREFIX = ./
+    RM = rm -f
+    RM_DIR = rm -rf
+    EXEC_PREFIX = ./
+    FIX_PATH = $1
 endif
-# Fim do bloco ifeq
+
+MKDIR_CMD = @mkdir -p $(OUTPUT_DIR)
 
 # --- Arquivos do Projeto ---
-OUTPUT_DIR = build
-
-# --- MUDANÇA: Definir TODOS os arquivos .c e .h ---
-SRCS = src/irlanfelipe_20240008480_poximv3.c
-# OBJS = $(SRCS:.c=.o)
-# HDRS = structs.h hash_table.h mergesort.h
+SRC = src/index.c
 
 # --- Descoberta Automática de Testes ---
+# Mapeia todos os testes a partir dos arquivos .hex
 INPUTS = $(wildcard test/*.hex)
 OUTPUTS = $(patsubst test/%.hex, $(OUTPUT_DIR)/%.out, $(INPUTS))
 
-# --- "Receitas" (Targets) ---
+# --- Alvos (.PHONY) ---
 .PHONY: all test clean
 
 all: $(EXECUTABLE)
 
-# --- MUDANÇA: Regra de LINKAGEM ---
-# O executável depende dos arquivos .o
-$(EXECUTABLE):
-	$(CC) $(CFLAGS)
+# --- Regra de Linkagem ---
+$(EXECUTABLE): $(SRC)
+	$(CC) $(CFLAGS) $(SRC) -o $(EXECUTABLE)
 
-# --- NOVO: Regra de COMPILAÇÃO (Pattern Rule) ---
-# Como transformar CADA .c em um .o
-# Se qualquer header (HDRS) mudar, recompila o .o
-%.o: %.c $(HDRS)
-	$(CC) $(CFLAGS) -c
-
-# --- Regra de Teste (Sem mudanças, mas depende de 'all') ---
+# --- Regra de Testes ---
 test: all $(OUTPUTS)
 	@echo "--- Todos os testes foram gerados! ---"
 
-# Esta regra está perfeita
-$(OUTPUT_DIR)/%.out: test/%.txt $(EXECUTABLE)
+# --- REGRA DE EXECUÇÃO ---
+# Passa 4 argumentos:
+# 1. test/NOME.hex
+# 2. out/NOME.out
+# 3. test/NOME_terminal.in  (ou test/terminal.in)
+# 4. out/NOME_terminal.out (ou out/terminal.out)
+$(OUTPUT_DIR)/%.out: test/%.hex $(EXECUTABLE)
 	$(MKDIR_CMD)
 	@echo "Rodando teste: $< ..."
-	$(EXEC_PREFIX)$(EXECUTABLE) $< $@
+	$(EXEC_PREFIX)$(EXECUTABLE) $< $@ test/$*_terminal.in $(OUTPUT_DIR)/$*_terminal.out
 
-# --- MUDANÇA: Limpar os arquivos .o também ---
+# --- Limpeza ---
 clean:
 	@echo "Limpando..."
-	@-del /f /q $(EXECUTABLE)
-	@-del /f /q src\*.o
-	@-rmdir /s /q $(OUTPUT_DIR)
+	@$(RM) $(EXECUTABLE)
+	@$(RM_DIR) $(OUTPUT_DIR)
 	@echo "Limpo!"
