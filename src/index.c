@@ -24,12 +24,6 @@
 #define ASSOCIATIVITY 2
 #define NUM_SETS 8
 #define MAX_AGE 255
-static FILE *logi;
-
-void init_log(void)
-{
-    logi = fopen("log.txt", "w");
-}
 
 typedef struct
 {
@@ -126,7 +120,6 @@ void print_cache(CACHE *cache, char name_event[5], uint32_t pc, FILE *output, ui
             sprintf(col3_details, "line=%u,age=%u,id=0x%07x,block[%u]={0x%08x,0x%08x,0x%08x,0x%08x}", cache_index, age, id, i, words[0], words[1], words[2], words[3]);
         else 
             sprintf(col3_details, "line=%u,age=%u,id=0x%06x,block[%u]={0x%08x,0x%08x,0x%08x,0x%08x}", cache_index, age, id, i, words[0], words[1], words[2], words[3]);
-        // fprintf(logi, "block[%u]={0x%08x, 0x%08x, 0x%08x, 0x%08x}\n", i, words[0], words[1], words[2], words[3]);
     }
     else if (evento == 1 || evento == 2 || evento == 3 || evento == 8)
     {
@@ -139,8 +132,6 @@ void print_cache(CACHE *cache, char name_event[5], uint32_t pc, FILE *output, ui
         sprintf(col3_details, "line=%u,valid={%u,%u},age={%u,%u},id={0x%06x,0x%06x}", cache_index, vetor_valido[0], vetor_valido[1], vetor_age[0], vetor_age[1], vetor_id[0], vetor_id[1]);
     }
     fprintf(output, "%-18s%-20s%s\n", col1_addr, col2_inst, col3_details);
-    // #cache_mem:h_event 0x????????    line=u3,age=u8,id=0x??????,block[u1]={0x????????,...,0x????????}
-    // #cache_mem:m_event 0x????????    line=u3,valid={u1,u1},age={u8,u8},id={0x??????,0x??????}
 }
 
 void evento_de_cache(CACHE *cache, int type_cache, FILE *output, uint32_t addr, uint32_t cache_index, uint32_t i)
@@ -973,6 +964,7 @@ int main(int argc, char *argv[])
     {
         perror("Erro ao abrir arquivo de saida");
         fclose(input);
+        input = NULL;
         exit(1);
     };
     FILE *term_in = NULL;
@@ -993,7 +985,6 @@ int main(int argc, char *argv[])
             perror("Erro ao abrir qemu.terminal.out");
         }
     }
-    init_log();
     
     // declarando registradores
     const char *x_label[32] = {
@@ -1007,6 +998,8 @@ int main(int argc, char *argv[])
         perror("Erro ao alocar memória para memória");
         fclose(input);
         fclose(output);
+        input = NULL;
+        output = NULL; 
         return 1;
     }
     memset(mem, 0, MEM_SIZE);
@@ -1069,6 +1062,7 @@ int main(int argc, char *argv[])
         term_in_buffer = malloc(term_in_size);
         fread(term_in_buffer, 1, term_in_size, term_in);
         fclose(term_in);
+        term_in = NULL;
     }
     while (run)
     {
@@ -2002,7 +1996,6 @@ int main(int argc, char *argv[])
     free(mem);
     if (term_in_buffer)
         free(term_in_buffer);
-    fclose(logi);
     fclose(term_out);
     fclose(output);
     fclose(input);
