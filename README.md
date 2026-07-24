@@ -1,5 +1,8 @@
 # 💻 Poxim-V — Simulador RISC-V em C
 
+[![C99](https://img.shields.io/badge/C-C99-blue.svg)](https://en.wikipedia.org/wiki/C99)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows-lightgrey.svg)]()
+
 Simulador educacional da arquitetura **RISC-V (RV32I + extensão M)** desenvolvido em C.  
 O projeto executa instruções passo a passo, simulando aspectos reais de hardware como **cache, exceções, interrupções** e geração de *trace* detalhado da execução.
 
@@ -26,83 +29,58 @@ O simulador foi projetado de forma modular, separando responsabilidades principa
 - **Handler** → Tratamento de exceções e interrupções  
 - **IO Serial** → Simulação de comunicação serial  
 
-Essa divisão facilita manutenção, testes e expansão do projeto.
-
 ---
 
 ## ⚙️ Funcionalidades
 
-### 🔹 Execução
-- Execução passo a passo de instruções RISC-V
-- Atualização do estado dos registradores
-- Controle completo do Program Counter (PC)
-
-### 🔹 Trace de Execução
-- Geração de arquivo `.out` com:
-  - Endereço da instrução (PC)
-  - Instrução em assembly
-  - Estado dos registradores
+### 🔹 Execução & Trace
+- Execução passo a passo de instruções RISC-V com controle de PC.
+- Geração de arquivo `.out` detalhado contendo:
+  - Endereço da instrução e desmontagem Assembly.
+  - Estado dos registradores e da memória cache.
+  - Métricas de *Hit/Miss* para cache de instruções e dados.
 
 ### 🔹 Simulação de Hardware
-- Cache de instruções e dados
-- Canal de comunicação serial
-- Execução fiel ao fluxo de CPU
+- Caches dedicadas de instruções e dados.
+- Comunicação serial por arquivo (Entrada/Saída de terminal).
 
-### 🔹 Exceções
-- `load fault`
-- `store fault`
-- `illegal instruction`
-
-### 🔹 Interrupções
-- Timer
-- Software
-- External
-- CLINT (Core Local Interruptor)
+### 🔹 Exceções & Interrupções
+- **Exceções:** `load fault`, `store fault` e `illegal instruction`.
+- **Interrupções:** Timer, Software, External e suporte a CLINT (*Core Local Interruptor*).
 
 ---
 
-## 🛠️ Instruções Suportadas
+## 📂 Estrutura de Pastas
 
-### 📦 Load
-- `lb`, `lh`, `lw`, `lbu`, `lhu`
+```text
+.
+├── src/            # Código-fonte em C
+├── test/           # Casos de teste (.hex e .in do terminal)
+├── out/            # Arquivos gerados durante os testes (.out)
+├── Makefile        # Scripts de compilação e testes
+└── README.md
+```
 
-### 📦 Store
-- `sb`, `sh`, `sw`
-
-### ➕ Aritméticas (Imediato)
-- `addi`, `andi`, `ori`, `xori`
-- `slti`, `sltiu`
-- `slli`, `srli`, `srai`
-
-### ➕ Aritméticas (Registradores)
-- `add`, `sub`, `sll`, `srl`, `sra`
-- `slt`, `sltu`
-- `and`, `or`, `xor`
-
-### ✖️ Extensão M (Multiplicação/Divisão)
-- `mul`, `mulh`, `mulhsu`, `mulhu`
-- `div`, `divu`, `rem`, `remu`
-
-### 🔀 Controle de Fluxo
-- Branch: `beq`, `bne`, `blt`, `bge`, `bltu`, `bgeu`
-- Jump: `jal`, `jalr`
-
-### 🧱 Imediato Superior
-- `lui`, `auipc`
-
-### 🧪 Sistema
-- `ebreak`
-
----
-
-## 🚀 Como Usar
+## 🛠️ Como Usar
 
 ### 📌 Pré-requisitos
+- Compilador C com suporte ao padrão C99 (gcc)
+- Utility make
 
-- Compilador C (`gcc`)
-- `make`
+## 🔧 Compilação e Testes
 
-### 🔧 Compilação
+### Compilar o executável
+`make`
+### Executar a suíte de testes automática
+`make test`
+### Limpar arquivos compilados e saídas de teste
+`make clean`
 
-```bash
-make
+## 💻 Execução Manual
+### Para rodar um programa hexadecimal específico manualmente:
+`./index <codigo.hex> <saida.out> <terminal.in> <terminal.out>`
+
+### Exemplo:
+`./index test/input2.hex out/input2.out test/terminal.in out/terminal.out`
+
+---
